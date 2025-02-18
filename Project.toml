@@ -4,6 +4,7 @@ authors = ["Ross Dempsey\n <sdempsey@princeton.edu>"]
 version = "0.1.0"
 
 [deps]
+ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
 ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
 Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 
