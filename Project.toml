@@ -1,0 +1,11 @@
+name = "Schwinger"
+uuid = "085a87bc-4ab7-4abb-a9ba-31d0565e739e"
+authors = ["Ross Dempsey\n <sdempsey@princeton.edu>"]
+version = "0.1.0"
+
+[deps]
+ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
+Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
+
+[compat]
+julia = "1.7"
