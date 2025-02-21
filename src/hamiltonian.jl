@@ -1,12 +1,101 @@
+abstract type SchwingerHamiltonian{N,F} end
+
+struct EDHamiltonian{N,F} <: SchwingerHamiltonian{N,F}
+    lattice::SchwingerLattice{N,F}
+    matrix::SparseMatrixCSC{ComplexF64,Int64}
+    L_max::Int64
+
+    function EDHamiltonian(lattice::SchwingerLattice{N,F}, matrix::SparseMatrixCSC{ComplexF64,Int64}, L_max::Int) where {N,F}
+        new{N,F}(lattice, matrix, L_max)
+    end
+end
+
 """
-`hamiltonian(lattice)`
+`EDHamiltonian(lattice)`
+Computes the Hamiltonian for the Schwinger model.
+
+# Arguments
+- `lattice::SchwingerLattice`: Schwinger model lattice.
+"""
+@memoize function EDHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing) where {N,F}
+    if !isnothing(L_max) && L_max < 0
+        throw(ArgumentError("L_max must be non-negative"))
+    end
+    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
+        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
+    end
+
+    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+
+    states = basis(lattice; L_max = L_max)
+    positions = Dict{Tuple{BitMatrix,Int},Int}((states[i].occupations, states[i].L₀) => i for i in eachindex(states))
+
+    I = Vector{Int}(undef, length(states)*N*F*2)
+    J = Vector{Int}(undef, length(states)*N*F*2)
+    V = Vector{ComplexF64}(undef, length(states)*N*F*2)
+    idx = 1
+    for i in eachindex(states)
+        I[idx] = i
+        J[idx] = i
+        V[idx] = energy(states[i])
+        idx += 1
+
+        state = states[i]
+        parities = [(-1)^sum(state.occupations[:,k]) for k in 1:F]
+        for j in 1:N
+            for k in 1:F
+                for dir in [-1,1]
+                    j2 = j + dir - (j + dir > N ? N : 0) + (j + dir < 1 ? N : 0)
+                    if state.occupations[j,k] && !state.occupations[j2,k]
+                        sign = 1
+
+                        hopoccupations=copy(state.occupations)
+                        hopL₀=state.L₀
+                        hopoccupations[j,k] = false
+                        hopoccupations[j2,k] = true
+                        if j==1 && dir==-1
+                            hopL₀ += 1
+                            sign *= parities[k]
+                        elseif j==N && dir==1
+                            hopL₀ -= 1
+                            sign *= parities[k]
+                        end
+
+                        if haskey(positions, (hopoccupations,hopL₀))
+                            I[idx] = i
+                            J[idx] = positions[(hopoccupations,hopL₀)]
+                            V[idx] = sign*((dir*1im)/(2*lattice.a) + (dir*(-1)^(j-1)*1im)lattice.mprime[j][k])
+                            idx += 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    matrix = sparse(I[1:idx-1], J[1:idx-1], V[1:idx-1], length(states), length(states))
+    return EDHamiltonian(lattice, matrix, L_max)
+end
+
+struct MPOHamiltonian{N,F} <: SchwingerHamiltonian{N,F}
+    lattice::SchwingerLattice{N,F}
+    mpo::MPO
+    L_max::Int64
+
+    function MPOHamiltonian(lattice::SchwingerLattice{N,F}, mpo::MPO, L_max::Int) where {N,F}
+        new{N,F}(lattice, mpo, L_max)
+    end
+end
+
+"""
+`MPOhamiltonian(lattice)`
 
 Computes the MPO Hamiltonian for the Schwinger model.
 
 # Arguments
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
-@memoize function hamiltonian(lattice::SchwingerLattice{N,F}; L_max::Int = 3) where {N,F}
+@memoize function MPOHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Int = 3) where {N,F}
     @unpack q, periodic, a, θ2π, mlat, mprime = lattice
 
     hamiltonian = OpSum()
@@ -112,5 +201,6 @@ Computes the MPO Hamiltonian for the Schwinger model.
         end
     end
 
-    return MPO(hamiltonian, sites(lattice; L_max = L_max))
+    mpo = MPO(hamiltonian, sites(lattice; L_max = L_max))
+    return MPOHamiltonian(lattice, mpo, L_max)
 end
