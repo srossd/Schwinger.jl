@@ -19,4 +19,9 @@ include("./hamiltonian.jl")
 include("./states.jl")
 include("./operators.jl")
 
+"""
+A Julia package for the Hamiltonian lattice Schwinger model.
+"""
+Schwinger
+
 end
