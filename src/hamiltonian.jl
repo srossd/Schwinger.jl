@@ -45,12 +45,13 @@ Computes the Hamiltonian for the Schwinger model.
         for j in 1:N
             for k in 1:F
                 for dir in [-1,1]
+                    !(1 ≤ j + dir ≤ N) && !(lattice.periodic) && continue
                     j2 = j + dir - (j + dir > N ? N : 0) + (j + dir < 1 ? N : 0)
                     if state.occupations[j,k] && !state.occupations[j2,k]
                         sign = 1
 
                         hopoccupations=copy(state.occupations)
-                        hopL₀=state.L₀
+                        hopL₀=L₀(state)
                         hopoccupations[j,k] = false
                         hopoccupations[j2,k] = true
                         if j==1 && dir==-1
@@ -64,7 +65,7 @@ Computes the Hamiltonian for the Schwinger model.
                         if haskey(positions, (hopoccupations,hopL₀))
                             I[idx] = i
                             J[idx] = positions[(hopoccupations,hopL₀)]
-                            V[idx] = sign*((dir*1im)/(2*lattice.a) + (dir*(-1)^(j-1)*1im)lattice.mprime[j][k])
+                            V[idx] = sign*(-(dir*1im)/(2*lattice.a) + dir*(-1)^j*1im*lattice.mprime[j][k]/2)
                             idx += 1
                         end
                     end
@@ -129,7 +130,7 @@ Computes the MPO Hamiltonian for the Schwinger model.
     for j in 1:N
         for k in 1:F
             ind = F*(j - 1) + k
-            hamiltonian += mlat[j][k] * ((-1) ^ (j + 1)),"Sz",ind
+            hamiltonian += mlat[j][k] * ((-1) ^ (j - 1)),"Sz",ind
         end
     end
 
@@ -138,8 +139,8 @@ Computes the MPO Hamiltonian for the Schwinger model.
     for j in 1:N-1
         for k in 1:F
             ind = F*(j - 1) + k
-            hamiltonian += (mprime[j][k]/2)*(-1)^j,"S+",ind,"S-",ind + F
-            hamiltonian += (mprime[j][k]/2)*(-1)^j,"S-",ind,"S+",ind + F
+            hamiltonian += (mprime[j][k]/2)*(-1)^(j-1),"S+",ind,"S-",ind + F
+            hamiltonian += -(mprime[j][k]/2)*(-1)^(j-1),"S-",ind,"S+",ind + F
         end
     end
 
@@ -148,11 +149,11 @@ Computes the MPO Hamiltonian for the Schwinger model.
             ind = F * (N - 1) + k
 
             if F ≤ 2 # safe to ignore fermion parity factors
-                hamiltonian += (mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1
-                hamiltonian += (mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1
+                hamiltonian += -(mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1
+                hamiltonian += -(mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1
             else
-                hamiltonian += (mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
-                hamiltonian += (mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
+                hamiltonian += -(mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
+                hamiltonian += -(mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
             end
         end
     end

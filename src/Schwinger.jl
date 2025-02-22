@@ -2,7 +2,7 @@ module Schwinger
 
 export SchwingerLattice
 export basis, EDHamiltonian, MPOHamiltonian
-export loweststates, groundstate
+export loweststates, groundstate, energygap
 export energy, occupations, charges, electricfields, entanglements
 export holonomy, wilsonline
 

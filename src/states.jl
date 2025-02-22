@@ -109,14 +109,14 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
 """
 
 function loweststates(hamiltonian::MPOHamiltonian{N,F}, nstates::Int; 
-    maxiters::Int = 500, initiallinkdim::Int = 4, maxlinkdim::Int = 600, energy_tol::Real = 1E-6, weight::Real = 100, outputlevel::Int = 1, minsweeps::Int = 10) where {N,F}
+    maxiters::Int = 500, initiallinkdim::Int = 4, maxlinkdim::Int = 600, energy_tol::Real = 1E-6, weight::Real = 100, outputlevel::Int = 0, minsweeps::Int = 5) where {N,F}
 
     H = hamiltonian.mpo
 
     states = Vector{SchwingerMPS}(undef, nstates)
     for idx in 1:nstates
-        state = [n == N * F + 1 ? L_max + 1 : isodd(floor((n-1)/F)) ? "Up" : "Dn" for n=1:(N * F + (lattice.periodic ? 1 : 0))]
-        psi = random_mps(sites(lattice), state; linkdims = initiallinkdim)
+        state = [n == N * F + 1 ? hamiltonian.L_max + 1 : isodd(floor((n-1)/F)) ? "Up" : "Dn" for n=1:(N * F + (hamiltonian.lattice.periodic ? 1 : 0))]
+        psi = random_mps(sites(hamiltonian.lattice; L_max = hamiltonian.L_max), state; linkdims = initiallinkdim)
 
         sweeps = Sweeps(maxiters)
         maxdim!(sweeps, maxlinkdim)
@@ -136,7 +136,12 @@ function loweststates(hamiltonian::MPOHamiltonian{N,F}, nstates::Int;
 end
 
 function loweststates(hamiltonian::EDHamiltonian, nstates::Int; shift=-100)
-    vals, vecs = Arpack.eigs(hamiltonian.matrix; nev=nstates, which=:LM, sigma = shift) # LM gives eigenvalues closest to sigma
+    vals, vecs = if nstates + 2 < size(hamiltonian.matrix)[1]
+         Arpack.eigs(hamiltonian.matrix; nev=nstates, which=:LM, sigma = shift) # LM gives eigenvalues closest to sigma
+    else
+        eigs = eigen(Matrix(hamiltonian.matrix))
+        (eigs.values[1:nstates], eigs.vectors[:,1:nstates])
+    end
     return [SchwingerEDState(hamiltonian, vecs[:,n]) for n=1:nstates]
 end
 
@@ -150,6 +155,18 @@ Returns the ground state of the Schwinger model Hamiltonian.
 
 function groundstate(hamiltonian::SchwingerHamiltonian{N,F}; kwargs...) where {N,F}
     return loweststates(hamiltonian, 1; kwargs...)[1]
+end
+
+"""
+`energygap(hamiltonian)`
+Returns the energy difference between the lowest two states of the Hamiltonian.
+
+# Arguments
+- `hamiltonian::SchwingerHamiltonian`: Schwinger model Hamiltonian.
+"""
+
+function energygap(hamiltonian::SchwingerHamiltonian{N,F}; kwargs...) where {N,F}
+    return abs(-(map(energy, loweststates(hamiltonian, 2; kwargs...))...))
 end
 
 """
