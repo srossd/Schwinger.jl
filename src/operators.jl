@@ -52,7 +52,6 @@ Returns the holonomy operator acting on `lattice`.
 # Arguments
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
-
 function holonomy(lattice::SchwingerLattice{N,F}, conjugate::Bool = false; L_max::Int = 3) where {N,F}
     if !lattice.periodic
         throw(DomainError(lattice, "Lattice must be periodic."))
@@ -75,7 +74,6 @@ Returns the Wilson line operator acting on `lattice` between sites `i` and `j`.
 - `j::Integer`: Ending site
 - `flavor::Integer`: Fermion flavor at endpoints
 """
-
 function wilsonline(lattice::SchwingerLattice{N,F}, i::Integer, j::Integer; flavor::Integer = 1, L_max::Int = 3, conjugate::Bool = false) where {N,F}
     if i < 1 || i > N || j < 1 || j > N || j > i
         throw(DomainError(self, "Site indices must satisfy 1 ≤ i < j ≤ N"))

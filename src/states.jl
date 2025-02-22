@@ -36,7 +36,6 @@ Returns a basis of Schwinger model states.
 - `F::Int`: number of flavors.
 - `L_max::Int`: maximum value of |L₀|.
 """
-
 @memoize function basis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing) where {N,F}
     if !isnothing(L_max) && L_max < 0
         throw(ArgumentError("L_max must be non-negative"))
@@ -84,7 +83,6 @@ end
 
 A Schwinger model MPS.
 """
-
 struct SchwingerMPS{N,F} <: SchwingerState{N,F}
     hamiltonian::SchwingerHamiltonian{N,F}
     psi::MPS
@@ -107,7 +105,6 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
 - `hamiltonian::MPOHamiltonian`: Schwinger model Hamiltonian.
 - `nstates::Int`:: number of states to determine.
 """
-
 function loweststates(hamiltonian::MPOHamiltonian{N,F}, nstates::Int; 
     maxiters::Int = 500, initiallinkdim::Int = 4, maxlinkdim::Int = 600, energy_tol::Real = 1E-6, weight::Real = 100, outputlevel::Int = 0, minsweeps::Int = 5) where {N,F}
 
@@ -152,7 +149,6 @@ Returns the ground state of the Schwinger model Hamiltonian.
 # Arguments
 - `hamiltonian::SchwingerHamiltonian`: Schwinger model Hamiltonian.
 """
-
 function groundstate(hamiltonian::SchwingerHamiltonian{N,F}; kwargs...) where {N,F}
     return loweststates(hamiltonian, 1; kwargs...)[1]
 end
@@ -164,7 +160,6 @@ Returns the energy difference between the lowest two states of the Hamiltonian.
 # Arguments
 - `hamiltonian::SchwingerHamiltonian`: Schwinger model Hamiltonian.
 """
-
 function energygap(hamiltonian::SchwingerHamiltonian{N,F}; kwargs...) where {N,F}
     return abs(-(map(energy, loweststates(hamiltonian, 2; kwargs...))...))
 end
