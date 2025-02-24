@@ -93,6 +93,10 @@ struct MPOHamiltonian{N,F} <: SchwingerHamiltonian{N,F}
     end
 end
 
+function sites(hamiltonian::MPOHamiltonian{N,F}) where {N,F}
+    return sites(hamiltonian.lattice; L_max = hamiltonian.L_max)
+end
+
 """
 `MPOhamiltonian(lattice)`
 
@@ -130,8 +134,8 @@ Computes the MPO Hamiltonian for the Schwinger model.
                 hamiltonian += 1/(2a),"S+",ind,"S-",k,"raise",N * F + 1
                 hamiltonian += 1/(2a),"S-",ind,"S+",k,"lower",N * F + 1
             else
-                hamiltonian += 1/(2a),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
-                hamiltonian += 1/(2a),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
+                hamiltonian += (2^N)/(2a),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
+                hamiltonian += (2^N)/(2a),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
             end
         end
     end
@@ -163,8 +167,8 @@ Computes the MPO Hamiltonian for the Schwinger model.
                 hamiltonian += -(mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1
                 hamiltonian += -(mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1
             else
-                hamiltonian += -(mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
-                hamiltonian += -(mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
+                hamiltonian += -(2^N)*(mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
+                hamiltonian += -(2^N)*(mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
             end
         end
     end

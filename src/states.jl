@@ -276,7 +276,7 @@ function L₀(state::SchwingerBasisState{N,F}) where {N,F}
 end
 
 function L₀(state::SchwingerMPS{N,F}) where {N,F}
-    return lattice(state).periodic ? lattice(state).q * expect(psi, "L0", sites=N*F + 1) : 0
+    return lattice(state).periodic ? lattice(state).q * expect(state.psi, "L0", sites=N*F + 1) : 0
 end
 
 function L₀(state::SchwingerEDState{N,F}) where {N,F}
