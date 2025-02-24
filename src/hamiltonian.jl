@@ -17,7 +17,7 @@ Computes the Hamiltonian for the Schwinger model.
 # Arguments
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
-@memoize function EDHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing) where {N,F}
+@memoize function EDHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
     if !isnothing(L_max) && L_max < 0
         throw(ArgumentError("L_max must be non-negative"))
     end
@@ -25,9 +25,14 @@ Computes the Hamiltonian for the Schwinger model.
         throw(ArgumentError("L_max must be 0 for open boundary conditions"))
     end
 
+    universe = mod(universe, lattice.q)
+    if universe < 0
+        universe += q
+    end
+
     L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
 
-    states = basis(lattice; L_max = L_max)
+    states = basis(lattice; L_max = L_max, q = lattice.q, universe = universe)
     positions = Dict{Tuple{BitMatrix,Int},Int}((states[i].occupations, states[i].L₀) => i for i in eachindex(states))
 
     I = Vector{Int}(undef, length(states)*N*F*2)
@@ -55,17 +60,17 @@ Computes the Hamiltonian for the Schwinger model.
                         hopoccupations[j,k] = false
                         hopoccupations[j2,k] = true
                         if j==1 && dir==-1
-                            hopL₀ += 1
+                            hopL₀ += lattice.q
                             sign *= parities[k]
                         elseif j==N && dir==1
-                            hopL₀ -= 1
+                            hopL₀ -= lattice.q
                             sign *= parities[k]
                         end
 
                         if haskey(positions, (hopoccupations,hopL₀))
                             I[idx] = i
                             J[idx] = positions[(hopoccupations,hopL₀)]
-                            V[idx] = sign*(-(dir*1im)/(2*lattice.a) + dir*(-1)^j*1im*lattice.mprime[j][k]/2)
+                            V[idx] = sign*(-(dir*1im)/(2*lattice.a) + (-1)^j*1im*lattice.mprime[j][k]/2)
                             idx += 1
                         end
                     end
@@ -96,8 +101,14 @@ Computes the MPO Hamiltonian for the Schwinger model.
 # Arguments
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
-@memoize function MPOHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Int = 3) where {N,F}
+@memoize function MPOHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Int = 3, universe::Int = 0) where {N,F}
     @unpack q, periodic, a, θ2π, mlat, mprime = lattice
+
+    universe = mod(universe, q)
+    if universe < 0
+        universe += q
+    end
+    θ2πu = θ2π .+ universe
 
     hamiltonian = OpSum()
 
@@ -140,7 +151,7 @@ Computes the MPO Hamiltonian for the Schwinger model.
         for k in 1:F
             ind = F*(j - 1) + k
             hamiltonian += (mprime[j][k]/2)*(-1)^(j-1),"S+",ind,"S-",ind + F
-            hamiltonian += -(mprime[j][k]/2)*(-1)^(j-1),"S-",ind,"S+",ind + F
+            hamiltonian += (mprime[j][k]/2)*(-1)^(j-1),"S-",ind,"S+",ind + F
         end
     end
 
@@ -162,7 +173,7 @@ Computes the MPO Hamiltonian for the Schwinger model.
 
     if periodic
         hamiltonian += q^2 * a * N / 2,"L0",N * F + 1,"L0",N * F + 1
-        hamiltonian += q * a * sum(θ2π),"L0",N * F + 1
+        hamiltonian += q * a * sum(θ2πu),"L0",N * F + 1
 
         hamiltonian += q^2 * a * N * F / 4,"L0",N * F + 1
         
@@ -173,12 +184,12 @@ Computes the MPO Hamiltonian for the Schwinger model.
             end
         end
     end
-    hamiltonian += a / 2 * sum(θ2π .^ 2),"Id",1
-    hamiltonian += q * a * F / 4 * sum(θ2π),"Id",1
+    hamiltonian += a / 2 * sum(θ2πu .^ 2),"Id",1
+    hamiltonian += q * a * F / 4 * sum(θ2πu),"Id",1
     for j in 1:N-1
         for k in 1:F
             ind = F*(j - 1) + k
-            hamiltonian += q * a * sum(θ2π[j+1:N]),"Sz",ind
+            hamiltonian += q * a * sum(θ2πu[j+1:N]),"Sz",ind
         end
     end
 

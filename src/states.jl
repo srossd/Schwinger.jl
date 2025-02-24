@@ -9,12 +9,16 @@ struct SchwingerBasisState{N,F} <: SchwingerState{N,F}
     lattice::SchwingerLattice{N,F}
     occupations::BitMatrix
     L₀::Int
+    q::Int
 
-    function SchwingerBasisState(lattice::SchwingerLattice{N,F}, occupations::BitMatrix, L₀::Int) where {N,F}
+    function SchwingerBasisState(lattice::SchwingerLattice{N,F}, occupations::BitMatrix, L₀::Int, q::Int) where {N,F}
         if size(occupations) != (N,F)
             throw(ArgumentError("occupations must be an NxF BitMatrix"))
         end
-        new{N,F}(lattice, occupations, L₀)
+        if q < 1
+            throw(ArgumentError("q must be ≥ 1"))
+        end
+        new{N,F}(lattice, occupations, L₀, q)
     end
 end
 
@@ -36,24 +40,27 @@ Returns a basis of Schwinger model states.
 - `F::Int`: number of flavors.
 - `L_max::Int`: maximum value of |L₀|.
 """
-@memoize function basis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing) where {N,F}
+@memoize function basis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
     if !isnothing(L_max) && L_max < 0
         throw(ArgumentError("L_max must be non-negative"))
     end
     if !isnothing(L_max) && L_max > 0 && !lattice.periodic
         throw(ArgumentError("L_max must be 0 for open boundary conditions"))
     end
+    if q < 1
+        throw(ArgumentError("q must be ≥ 1"))
+    end
 
     L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
     states = Vector{SchwingerBasisState{N,F}}(undef, nstates(N, F; L_max = L_max))
     stateidx = 1
-    for L₀ in -L_max:L_max
+    for L₀ in ((-L_max:L_max) .* q) .+ universe
         for comb in combinations(1:N*F, N*F÷2)
             occupations = BitMatrix(undef, N, F)
             for idx in comb
                 occupations[idx] = true
             end
-            states[stateidx] = SchwingerBasisState(lattice, occupations, L₀)
+            states[stateidx] = SchwingerBasisState(lattice, occupations, L₀, q)
             stateidx += 1
         end
     end
@@ -261,7 +268,7 @@ Return a list of the expectations of Q operators on each site and for each known
 - `state::SchwingerState`: Schwinger model state.
 """
 function charges(state::SchwingerState{N,F}) where {N,F}
-    return sum(occupations(state), dims=2) + (F .* [-1/2 + (-1)^(n - 1)/2 for n=1:N])
+    return (sum(occupations(state), dims=2) + (F .* [-1/2 + (-1)^(n - 1)/2 for n=1:N])) .* lattice(state).q
 end
 
 function L₀(state::SchwingerBasisState{N,F}) where {N,F}
@@ -269,11 +276,11 @@ function L₀(state::SchwingerBasisState{N,F}) where {N,F}
 end
 
 function L₀(state::SchwingerMPS{N,F}) where {N,F}
-    return lattice(state).periodic ? expect(psi, "L0", sites=N*F + 1) : 0
+    return lattice(state).periodic ? lattice(state).q * expect(psi, "L0", sites=N*F + 1) : 0
 end
 
 function L₀(state::SchwingerEDState{N,F}) where {N,F}
-    states = basis(lattice(state); L_max = state.hamiltonian.L_max)
+    states = basis(lattice(state); L_max = state.hamiltonian.L_max, q = lattice(state).q)
     return sum(abs2(coeff) * L₀(state) for (coeff, state) in zip(state.coeffs, states))
 end
 
