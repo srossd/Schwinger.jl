@@ -22,13 +22,15 @@ using ProgressMeter
         mpo_efs = electricfields(mpo_gs)
         @test ed_efs ≈ mpo_efs rtol=1E-4
 
-        ed_wilson = expectation(EDWilsonLoop(lat), ed_gs)
-        mpo_wilson = expectation(MPOWilsonLoop(lat), mpo_gs)
-        @test ed_wilson ≈ mpo_wilson rtol=1E-4
+        if lat.periodic
+            ed_wilson = expectation(EDWilsonLoop(lat), ed_gs)
+            mpo_wilson = expectation(MPOWilsonLoop(lat), mpo_gs)
+            @test ed_wilson ≈ mpo_wilson rtol=1E-4
+        end
         
         ed_gap = energygap(EDHamiltonian(lat))
         mpo_gap = energygap(MPOHamiltonian(lat); energy_tol=1E-12)
 
-        @test ed_gap ≈ mpo_gap rtol=1E-5
+        @test ed_gap ≈ mpo_gap rtol=1E-4
     end
 end

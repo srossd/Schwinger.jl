@@ -77,8 +77,8 @@ function MPOWilsonLoop(lattice::SchwingerLattice{N,F}, conjugate::Bool = false; 
     holonomy = OpSum()
     holonomy += (conjugate ? "lower" : "raise"),N * F + 1
     
-    mpo = MPO(holonomy, sites(hamiltonian))
-    return MPOOperator(hamiltonian, mpo, L_max, universe)
+    mpo = MPO(holonomy, sites(lattice; L_max=L_max))
+    return MPOOperator(lattice, mpo, L_max, universe)
 end
 
 """
