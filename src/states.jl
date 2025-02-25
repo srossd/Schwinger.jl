@@ -139,9 +139,9 @@ function loweststates(hamiltonian::MPOHamiltonian{N,F}, nstates::Int;
     return states
 end
 
-function loweststates(hamiltonian::EDHamiltonian, nstates::Int; shift=-100)
+function loweststates(hamiltonian::EDHamiltonian, nstates::Int)
     vals, vecs = if nstates + 2 < size(hamiltonian.matrix)[1]
-         Arpack.eigs(hamiltonian.matrix; nev=nstates, which=:LM, sigma = shift) # LM gives eigenvalues closest to sigma
+         Arpack.eigs(hamiltonian.matrix; nev=nstates, which=:SR)
     else
         eigs = eigen(Matrix(hamiltonian.matrix))
         (eigs.values[1:nstates], eigs.vectors[:,1:nstates])
@@ -206,7 +206,7 @@ Return the expectation value of the Hamiltonian.
 - `state::SchwingerEDState`: Schwinger model state.
 """
 function energy(state::SchwingerEDState{N,F}) where {N,F}
-    return dot(state.coeffs, state.hamiltonian.matrix * state.coeffs)
+    return real(dot(state.coeffs, state.hamiltonian.matrix * state.coeffs))
 end
 
 """
@@ -218,7 +218,7 @@ Return the expectation value of the Hamiltonian.
 - `state::SchwingerMPS`: Schwinger model state.
 """
 function energy(state::SchwingerMPS{N,F}) where {N,F}
-    return inner(state.psi', state.hamiltonian.mpo, state.psi)
+    return real(inner(state.psi', state.hamiltonian.mpo, state.psi))
 end
 
 """
