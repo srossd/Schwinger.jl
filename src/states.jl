@@ -73,10 +73,10 @@ end
 A Schwinger model state represented as a linear combination of basis states.
 """
 struct SchwingerEDState{N,F} <: SchwingerState{N,F}
-    hamiltonian::SchwingerHamiltonian{N,F}
+    hamiltonian::EDHamiltonian{N,F}
     coeffs::Vector{ComplexF64}
 
-    function SchwingerEDState(hamiltonian::SchwingerHamiltonian{N,F}, coeffs::Vector{ComplexF64}) where {N,F}
+    function SchwingerEDState(hamiltonian::EDHamiltonian{N,F}, coeffs::Vector{ComplexF64}) where {N,F}
         new{N,F}(hamiltonian, coeffs)
     end
 end
@@ -91,10 +91,10 @@ end
 A Schwinger model MPS.
 """
 struct SchwingerMPS{N,F} <: SchwingerState{N,F}
-    hamiltonian::SchwingerHamiltonian{N,F}
+    hamiltonian::MPOHamiltonian{N,F}
     psi::MPS
 
-    function SchwingerMPS(hamiltonian::SchwingerHamiltonian{N,F}, psi::MPS) where {N,F}
+    function SchwingerMPS(hamiltonian::MPOHamiltonian{N,F}, psi::MPS) where {N,F}
         new{N,F}(hamiltonian, psi)
     end
 end
@@ -172,17 +172,29 @@ function energygap(hamiltonian::SchwingerHamiltonian{N,F}; kwargs...) where {N,F
 end
 
 """
-`energy(state)`
+`expectation(op, state)`
 
-Return the expectation value of the Hamiltonian.
+Return the expectation value of the operator `op` in `state`.
 
 # Arguments
-- `state::SchwingerMPS`: Schwinger model state.
+- `op::EDOperator{N,F}``: operator.
+- `state::SchwingerEDState`: state.
 """
-function energy(state::SchwingerMPS{N,F}) where {N,F}
-    H = state.hamiltonian.mpo
-    psi = state.psi
-    return inner(psi', H, psi)
+function expectation(op::EDOperator{N,F}, state::SchwingerEDState{N,F}) where {N,F}
+    return dot(state.coeffs, op.matrix * state.coeffs)
+end
+
+"""
+`expectation(op, state)`
+
+Return the expectation value of the operator `op` in `state`.
+
+# Arguments
+- `op::MPOOperator{N,F}``: operator.
+- `state::SchwingerMPS`: state.
+"""
+function expectation(op::MPOOperator{N,F}, state::SchwingerMPS{N,F}) where {N,F}
+    return inner(state.psi', op.mpo, state.psi)
 end
 
 """
@@ -194,9 +206,19 @@ Return the expectation value of the Hamiltonian.
 - `state::SchwingerEDState`: Schwinger model state.
 """
 function energy(state::SchwingerEDState{N,F}) where {N,F}
-    H = state.hamiltonian.matrix
-    coeffs = state.coeffs
-    return real(dot(coeffs, H*coeffs))
+    return dot(state.coeffs, state.hamiltonian.matrix * state.coeffs)
+end
+
+"""
+`energy(state)`
+
+Return the expectation value of the Hamiltonian.
+
+# Arguments
+- `state::SchwingerMPS`: Schwinger model state.
+"""
+function energy(state::SchwingerMPS{N,F}) where {N,F}
+    return inner(state.psi', state.hamiltonian.mpo, state.psi)
 end
 
 """
@@ -257,6 +279,19 @@ function occupations(state::SchwingerEDState{N,F}) where {N,F}
         occs .+= abs2(coeff) .* occupations(state)
     end
     return occs
+end
+
+"""
+`scalarvev(state)`
+
+Return the VEV of the scalar condensate L⁻¹ ∑ (-1)ⁿ χ†ₙχₙ
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+"""
+function scalarvev(state::SchwingerState{N,F}) where {N,F}
+    occs = occupations(state)[:,1]
+    return (repeat([1,-1],N÷2)'occs)/lattice(state).L
 end
 
 """

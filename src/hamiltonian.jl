@@ -1,15 +1,3 @@
-abstract type SchwingerHamiltonian{N,F} end
-
-struct EDHamiltonian{N,F} <: SchwingerHamiltonian{N,F}
-    lattice::SchwingerLattice{N,F}
-    matrix::SparseMatrixCSC{ComplexF64,Int64}
-    L_max::Int64
-
-    function EDHamiltonian(lattice::SchwingerLattice{N,F}, matrix::SparseMatrixCSC{ComplexF64,Int64}, L_max::Int) where {N,F}
-        new{N,F}(lattice, matrix, L_max)
-    end
-end
-
 """
 `EDHamiltonian(lattice)`
 Computes the Hamiltonian for the Schwinger model.
@@ -80,21 +68,7 @@ Computes the Hamiltonian for the Schwinger model.
     end
 
     matrix = sparse(I[1:idx-1], J[1:idx-1], V[1:idx-1], length(states), length(states))
-    return EDHamiltonian(lattice, matrix, L_max)
-end
-
-struct MPOHamiltonian{N,F} <: SchwingerHamiltonian{N,F}
-    lattice::SchwingerLattice{N,F}
-    mpo::MPO
-    L_max::Int64
-
-    function MPOHamiltonian(lattice::SchwingerLattice{N,F}, mpo::MPO, L_max::Int) where {N,F}
-        new{N,F}(lattice, mpo, L_max)
-    end
-end
-
-function sites(hamiltonian::MPOHamiltonian{N,F}) where {N,F}
-    return sites(hamiltonian.lattice; L_max = hamiltonian.L_max)
+    return EDHamiltonian(lattice, matrix, L_max, universe)
 end
 
 """
@@ -218,5 +192,5 @@ Computes the MPO Hamiltonian for the Schwinger model.
     end
 
     mpo = MPO(hamiltonian, sites(lattice; L_max = L_max))
-    return MPOHamiltonian(lattice, mpo, L_max)
+    return MPOHamiltonian(lattice, mpo, L_max, universe)
 end

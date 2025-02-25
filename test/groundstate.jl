@@ -29,7 +29,7 @@ using ProgressMeter
     end
 end
 
-@testset "Chiral Condensate" begin
+@testset "Scalar VEV" begin
     f(x, L) = 1/(1 - exp(L*cosh(x)/√(π)))
 
     N=10
@@ -37,8 +37,7 @@ end
         lattice = SchwingerLattice{N,1}(periodic=true, L=L)
         ground = groundstate(EDHamiltonian(lattice))
         
-        occs = occupations(ground)[:,1]
-        condensate = (repeat([1,-1],N÷2)'occs)/L
+        condensate = scalarvev(ground)
 
         # See eq (7) of https://arxiv.org/abs/2206.05308
         exact = -exp(γ)/(2π^(3/2))*exp(2*solve(IntegralProblem(f, (0, Inf), L), QuadGKJL()).u)
@@ -49,17 +48,28 @@ end
     L=8
     lattice = SchwingerLattice{N,1}(periodic=true, L=L)
     ground = groundstate(EDHamiltonian(lattice))
-    occs = occupations(ground)[:,1]
-    condensate = (repeat([1,-1],5)'occs)/L
+    condensate = scalarvev(ground)
     @showprogress desc = "Chiral Condensate (m = 0): θ dependence" for θ2π=0:.04:1
         lattice = SchwingerLattice{N,1}(periodic=true, L=L, θ2π=θ2π)
         ground = groundstate(EDHamiltonian(lattice))
         
-        occs = occupations(ground)[:,1]
-        condensate_ratio = (repeat([1,-1],N÷2)'occs)/L/condensate
+        condensate_ratio = scalarvev(ground)/condensate
 
         exact = cos(2π*θ2π)
 
         @test condensate_ratio ≈ exact rtol=0.01
+    end
+end
+
+@testset "Wilson loop VEV" begin
+    @showprogress desc = "Wilson loop VEV" for L=1:10:1
+        lattice = SchwingerLattice{10,1}(periodic=true, L=L)
+        ground = groundstate(EDHamiltonian(lattice))
+        
+        vev = expectation(EDWilsonLoop(lattice), ground)
+
+        exact = exp(-√(π)/4*L)
+
+        @test vev ≈ exact rtol=0.05
     end
 end

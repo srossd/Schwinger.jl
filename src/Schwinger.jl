@@ -2,9 +2,9 @@ module Schwinger
 
 export SchwingerLattice
 export basis, EDHamiltonian, MPOHamiltonian
+export expectation, EDWilsonLoop, MPOWilsonLoop
 export loweststates, groundstate, energygap
-export energy, occupations, charges, electricfields, entanglements
-export holonomy, wilsonline
+export energy, occupations, charges, electricfields, entanglements, scalarvev
 
 using ITensors, ITensorMPS
 using Combinatorics
@@ -15,9 +15,9 @@ using Memoize
 using Parameters
 
 include("./lattice.jl")
+include("./operators.jl")
 include("./hamiltonian.jl")
 include("./states.jl")
-include("./operators.jl")
 include("./utility.jl")
 
 """

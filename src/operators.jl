@@ -1,59 +1,131 @@
-"""
-`holonomy(hamiltonian, conjugate = false)`
+abstract type SchwingerOperator{N,F} end
 
-Returns the holonomy operator corresponding to `hamiltonian`.
+struct EDOperator{N,F} <: SchwingerOperator{N,F}
+    lattice::SchwingerLattice{N,F}
+    matrix::SparseMatrixCSC{ComplexF64,Int64}
+    L_max::Int
+    universe::Int
 
-# Arguments
-- `hamiltonian::EDHamiltonian`: Schwinger model Hamiltonian.
-"""
-function holonomy(hamiltonian::EDHamiltonian{N,F}, conjugate::Bool = false) where {N,F}
-    if !hamiltonian.lattice.periodic
-        throw(DomainError(lattice, "Lattice must be periodic."))
+    function EDOperator(lattice::SchwingerLattice{N,F}, matrix::SparseMatrixCSC{ComplexF64,Int64}, L_max::Int, universe::Int) where {N,F}
+        return new{N,F}(lattice, matrix, L_max, universe)
     end
+end
 
-    holonomy = OpSum()
-    holonomy += (conjugate ? "lower" : "raise"),N * F + 1
+struct MPOOperator{N,F} <: SchwingerOperator{N,F}
+    lattice::SchwingerLattice{N,F}
+    mpo::MPO
+    L_max::Int
+    universe::Int
 
-    return MPO(holonomy, sites(hamiltonian))
+    function MPOOperator(lattice::SchwingerLattice{N,F}, mpo::MPO, L_max::Int, universe::Int) where {N,F}
+        return new{N,F}(lattice, mpo, L_max, universe)
+    end
+end
+
+abstract type SchwingerHamiltonian{N,F} <: SchwingerOperator{N,F} end
+
+struct EDHamiltonian{N,F} <: SchwingerHamiltonian{N,F}
+    lattice::SchwingerLattice{N,F}
+    matrix::SparseMatrixCSC{ComplexF64,Int64}
+    L_max::Int64
+    universe::Int64
+
+    function EDHamiltonian(lattice::SchwingerLattice{N,F}, matrix::SparseMatrixCSC{ComplexF64,Int64}, L_max::Int, universe::Int64) where {N,F}
+        new{N,F}(lattice, matrix, L_max, universe)
+    end
+end
+
+struct MPOHamiltonian{N,F} <: SchwingerHamiltonian{N,F}
+    lattice::SchwingerLattice{N,F}
+    mpo::MPO
+    L_max::Int64
+    universe::Int64
+
+    function MPOHamiltonian(lattice::SchwingerLattice{N,F}, mpo::MPO, L_max::Int, universe::Int) where {N,F}
+        new{N,F}(lattice, mpo, L_max, universe)
+    end
 end
 
 """
-`holonomy(hamiltonian, conjugate = false)`
+`wilsonloop(hamiltonian, conjugate = false)`
 
-Returns the holonomy operator corresponding to `hamiltonian`.
+Returns the spatial Wilson loop operator for `lattice`.
 
 # Arguments
-- `hamiltonian::EDHamiltonian`: Schwinger model Hamiltonian.
+- `lattice::SchwingerLattice`: lattice.
+- `conjugate::Bool`: Conjugation of the Wilson loop.
 """
-function holonomy(lattice::SchwingerLattice{N,F}, conjugate::Bool = false) where {N,F}
+function MPOWilsonLoop(lattice::SchwingerLattice{N,F}, conjugate::Bool = false; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
     if !lattice.periodic
         throw(DomainError(lattice, "Lattice must be periodic."))
     end
 
+    if !isnothing(L_max) && L_max < 0
+        throw(ArgumentError("L_max must be non-negative"))
+    end
+    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
+        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
+    end
+
+    universe = mod(universe, lattice.q)
+    if universe < 0
+        universe += q
+    end
+
+    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+
     holonomy = OpSum()
     holonomy += (conjugate ? "lower" : "raise"),N * F + 1
-
-    return MPO(holonomy, sites(lattice; L_max = L_max))
+    
+    mpo = MPO(holonomy, sites(hamiltonian))
+    return MPOOperator(hamiltonian, mpo, L_max, universe)
 end
 
 """
-`wilsonline(lattice, i, j, flavor = 1, conjugate = false)`
+`wilsonloop(hamiltonian, conjugate = false)`
 
-Returns the Wilson line operator acting on `lattice` between sites `i` and `j`.
+Returns the spatial Wilson loop operator for `lattice`.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
-- `i::Integer`: Starting site
-- `j::Integer`: Ending site
-- `flavor::Integer`: Fermion flavor at endpoints
+- `lattice::SchwingerLattice`: lattice.
+- `conjugate::Bool`: Conjugation of the Wilson loop.
 """
-function wilsonline(lattice::SchwingerLattice{N,F}, i::Integer, j::Integer; flavor::Integer = 1, L_max::Int = 3, conjugate::Bool = false) where {N,F}
-    if i < 1 || i > N || j < 1 || j > N || j > i
-        throw(DomainError(self, "Site indices must satisfy 1 ≤ i < j ≤ N"))
+function EDWilsonLoop(lattice::SchwingerLattice{N,F}, conjugate::Bool = false; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
+    if !lattice.periodic
+        throw(DomainError(lattice, "Lattice must be periodic."))
     end
 
-    line = OpSum()
-    line += 1,(conjugate ? "S-" : "S+"),(i - 1)*F + flavor,(conjugate ? "S+" : "S-"),(j - 1)*F + flavor
+    if !isnothing(L_max) && L_max < 0
+        throw(ArgumentError("L_max must be non-negative"))
+    end
+    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
+        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
+    end
 
-    return MPO(line, sites(lattice; L_max = L_max))
+    universe = mod(universe, lattice.q)
+    if universe < 0
+        universe += q
+    end
+
+    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+
+    states = basis(lattice; L_max = L_max, q = lattice.q, universe = universe)
+    positions = Dict{Tuple{BitMatrix,Int},Int}((states[i].occupations, states[i].L₀) => i for i in eachindex(states))
+
+    I = Vector{Int}(undef, length(states))
+    J = Vector{Int}(undef, length(states))
+    V = Vector{ComplexF64}(undef, length(states))
+    idx = 1
+    for i in eachindex(states)
+        key = (states[i].occupations, states[i].L₀ + (conjugate ? -1 : 1))
+        if haskey(positions, key)
+            I[idx] = i
+            J[idx] = positions[key]
+            V[idx] = 1
+            idx += 1
+        end
+    end
+
+    matrix = sparse(I[1:idx-1], J[1:idx-1], V[1:idx-1], length(states), length(states))
+    return EDOperator(lattice, matrix, L_max, universe)
 end

@@ -18,6 +18,7 @@ struct SchwingerLattice{N,F}
     q::Int
     periodic::Bool
     a::Float64
+    L::Float64
 
     # local parameters (typically position-independent)
     θ2π::NTuple{N,Float64}
@@ -50,6 +51,8 @@ struct SchwingerLattice{N,F}
             a = L/N
         end
 
+        L = N*a
+
         if isa(θ2π, Real)
             θ2π = NTuple{N, Float64}((θ2π for _ in 1:N))
         end
@@ -72,6 +75,6 @@ struct SchwingerLattice{N,F}
             mprime = NTuple{N, NTuple{F, Float64}}((mprime for _ in 1:N))
         end
         
-        new(q, periodic, a, θ2π, mlat, mprime)
+        new(q, periodic, a, L, θ2π, mlat, mprime)
     end
 end
