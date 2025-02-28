@@ -16,6 +16,8 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 [compat]
 Arpack = "^0.5"
 Combinatorics = "^1.0"
+ITensors = "^0.6"
+ITensorMPS = "^0.2"
 LinearAlgebra = "^1.8"
 Parameters = "0.12"
 SparseArrays = "^1.8"
