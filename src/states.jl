@@ -31,14 +31,15 @@ function lattice(state::SchwingerBasisState{N,F}) where {N,F}
 end
 
 """
-`basis(N, F; L_max)`
+`basis(lattice; L_max, q, universe)`
 
 Returns a basis of Schwinger model states.
 
 # Arguments
-- `N::Int`: number of sites.
-- `F::Int`: number of flavors.
-- `L_max::Int`: maximum value of |L₀|.
+- `lattice::SchwingerLattice`
+- `L_max::Int`
+- `q::Int`
+- `universe::Int`
 """
 @memoize function basis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
     if !isnothing(L_max) && L_max < 0
@@ -67,16 +68,21 @@ Returns a basis of Schwinger model states.
     return states
 end
 
+@memoize function positionindex(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
+    states = basis(lattice; L_max = L_max, q = lattice.q, universe = universe)
+    return Dict{Tuple{BitMatrix,Int},Int}((states[i].occupations, states[i].L₀) => i for i in eachindex(states))
+end
+
 """
 `SchwingerEDState{N,F}(hamiltonian, coeffs)`
 
 A Schwinger model state represented as a linear combination of basis states.
 """
 struct SchwingerEDState{N,F} <: SchwingerState{N,F}
-    hamiltonian::EDHamiltonian{N,F}
+    hamiltonian::EDOperator{N,F}
     coeffs::Vector{ComplexF64}
 
-    function SchwingerEDState(hamiltonian::EDHamiltonian{N,F}, coeffs::Vector{ComplexF64}) where {N,F}
+    function SchwingerEDState(hamiltonian::EDOperator{N,F}, coeffs::Vector{ComplexF64}) where {N,F}
         new{N,F}(hamiltonian, coeffs)
     end
 end
@@ -91,10 +97,10 @@ end
 A Schwinger model MPS.
 """
 struct SchwingerMPS{N,F} <: SchwingerState{N,F}
-    hamiltonian::MPOHamiltonian{N,F}
+    hamiltonian::MPOOperator{N,F}
     psi::MPS
 
-    function SchwingerMPS(hamiltonian::MPOHamiltonian{N,F}, psi::MPS) where {N,F}
+    function SchwingerMPS(hamiltonian::MPOOperator{N,F}, psi::MPS) where {N,F}
         new{N,F}(hamiltonian, psi)
     end
 end
@@ -109,10 +115,10 @@ end
 Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
 
 # Arguments
-- `hamiltonian::MPOHamiltonian`: Schwinger model Hamiltonian.
+- `hamiltonian::MPOOperator`: Schwinger model Hamiltonian.
 - `nstates::Int`:: number of states to determine.
 """
-function loweststates(hamiltonian::MPOHamiltonian{N,F}, nstates::Int; 
+function loweststates(hamiltonian::MPOOperator{N,F}, nstates::Int; 
     maxiters::Int = 500, initiallinkdim::Int = 4, maxlinkdim::Int = 600, energy_tol::Real = 1E-6, weight::Real = 100, outputlevel::Int = 0, minsweeps::Int = 5) where {N,F}
 
     H = hamiltonian.mpo
@@ -139,9 +145,18 @@ function loweststates(hamiltonian::MPOHamiltonian{N,F}, nstates::Int;
     return states
 end
 
-function loweststates(hamiltonian::EDHamiltonian, nstates::Int)
-    vals, vecs = if nstates + 2 < size(hamiltonian.matrix)[1]
-         Arpack.eigs(hamiltonian.matrix; nev=nstates, which=:SR)
+function loweststates(hamiltonian::EDOperator, nstates::Int; ncv::Int = max(20, 2*nstates + 1))
+    _, vecs = if nstates + 2 < size(hamiltonian.matrix)[1]
+        try
+            Arpack.eigs(hamiltonian.matrix; nev=nstates, ncv = ncv, which=:SR)
+        catch e
+            if e isa Arpack.XYAUPD_Exception
+                @warn "Arpack.eigs failed to converge, increasing ncv to $(2*ncv)"
+                return loweststates(hamiltonian, nstates; ncv = 2*ncv)
+            else
+                rethrow(e)
+            end
+        end
     else
         eigs = eigen(Matrix(hamiltonian.matrix))
         (eigs.values[1:nstates], eigs.vectors[:,1:nstates])
@@ -154,9 +169,9 @@ end
 Returns the ground state of the Schwinger model Hamiltonian.
 
 # Arguments
-- `hamiltonian::SchwingerHamiltonian`: Schwinger model Hamiltonian.
+- `hamiltonian::SchwingerOperator`: Schwinger model Hamiltonian.
 """
-function groundstate(hamiltonian::SchwingerHamiltonian{N,F}; kwargs...) where {N,F}
+function groundstate(hamiltonian::SchwingerOperator{N,F}; kwargs...) where {N,F}
     return loweststates(hamiltonian, 1; kwargs...)[1]
 end
 
@@ -165,9 +180,9 @@ end
 Returns the energy difference between the lowest two states of the Hamiltonian.
 
 # Arguments
-- `hamiltonian::SchwingerHamiltonian`: Schwinger model Hamiltonian.
+- `hamiltonian::SchwingerOperator`: Schwinger model Hamiltonian.
 """
-function energygap(hamiltonian::SchwingerHamiltonian{N,F}; kwargs...) where {N,F}
+function energygap(hamiltonian::SchwingerOperator{N,F}; kwargs...) where {N,F}
     return abs(-(map(energy, loweststates(hamiltonian, 2; kwargs...))...))
 end
 
@@ -205,20 +220,8 @@ Return the expectation value of the Hamiltonian.
 # Arguments
 - `state::SchwingerEDState`: Schwinger model state.
 """
-function energy(state::SchwingerEDState{N,F}) where {N,F}
-    return real(dot(state.coeffs, state.hamiltonian.matrix * state.coeffs))
-end
-
-"""
-`energy(state)`
-
-Return the expectation value of the Hamiltonian.
-
-# Arguments
-- `state::SchwingerMPS`: Schwinger model state.
-"""
-function energy(state::SchwingerMPS{N,F}) where {N,F}
-    return real(inner(state.psi', state.hamiltonian.mpo, state.psi))
+function energy(state::Union{SchwingerEDState{N,F},SchwingerMPS{N,F}}) where {N,F}
+    return real(expectation(state.hamiltonian, state))
 end
 
 """
@@ -295,6 +298,26 @@ function scalarvev(state::SchwingerState{N,F}) where {N,F}
 end
 
 """
+`pseudoscalarvev(state)`
+
+Return the VEV of the pseudoscalar condensate L⁻¹ ∑ (-1)ⁿ χ†ₙχₙ
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+"""
+function pseudoscalarvev(state::SchwingerMPS{N,F}) where {N,F}
+    return real(expectation(MPOHoppingMass(lattice(state); bare = true), state)/lattice(state).L)
+end
+
+function pseudoscalarvev(state::SchwingerEDState{N,F}) where {N,F}
+    return real(expectation(EDHoppingMass(lattice(state); bare = true), state)/lattice(state).L)
+end
+
+function pseudoscalarvev(state::SchwingerBasisState{N,F}) where {N,F}
+    return 0
+end
+
+"""
 `charges(state)`
 
 Return a list of the expectations of Q operators on each site and for each known eigenstate.
@@ -306,6 +329,14 @@ function charges(state::SchwingerState{N,F}) where {N,F}
     return (sum(occupations(state), dims=2) + (F .* [-1/2 + (-1)^(n - 1)/2 for n=1:N])) .* lattice(state).q
 end
 
+"""
+`L₀(state)`
+
+Return the expectation value of L₀.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+"""
 function L₀(state::SchwingerBasisState{N,F}) where {N,F}
     return lattice(state).periodic ? state.L₀ : 0
 end

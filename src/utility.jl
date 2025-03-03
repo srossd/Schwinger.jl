@@ -44,6 +44,6 @@ end
     return sites
 end
 
-function sites(hamiltonian::MPOHamiltonian{N,F}) where {N,F}
+function sites(hamiltonian::MPOOperator{N,F}) where {N,F}
     return sites(hamiltonian.lattice; L_max = hamiltonian.L_max)
 end
