@@ -14,3 +14,13 @@ using Test
         include("massgap.jl")
     end
 end
+
+@testset "Time evolution tests" begin
+    @testset "ED vs MPO" begin
+        include("ed_mpo_time.jl")
+    end
+
+    @testset "Wilson loop correlator" begin
+        include("wilson_correlator.jl")
+    end
+end
