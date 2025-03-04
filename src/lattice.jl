@@ -15,6 +15,8 @@ A `SchwingerLattice` object.
 """
 struct SchwingerLattice{N,F}
     # global parameters
+    N::Int
+    F::Int
     q::Int
     periodic::Bool
     a::Float64
@@ -75,6 +77,6 @@ struct SchwingerLattice{N,F}
             mprime = NTuple{N, NTuple{F, Float64}}((mprime for _ in 1:N))
         end
         
-        new(q, periodic, a, L, θ2π, mlat, mprime)
+        new(N, F, q, periodic, a, L, θ2π, mlat, mprime)
     end
 end

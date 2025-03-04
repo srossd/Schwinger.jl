@@ -1,38 +1,3 @@
-function constructoperator(lattice::SchwingerLattice{N,F}, action::Function; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
-    if !isnothing(L_max) && L_max < 0
-        throw(ArgumentError("L_max must be non-negative"))
-    end
-    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
-        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
-    end
-
-    universe = mod(universe, lattice.q)
-    if universe < 0
-        universe += q
-    end
-
-    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
-
-    states = basis(lattice; L_max = L_max, q = lattice.q, universe = universe)
-    positions = positionindex(lattice; L_max = L_max, q = lattice.q, universe = universe)
-
-    I = Vector{Int}()
-    J = Vector{Int}()
-    V = Vector{ComplexF64}()
-    for i in eachindex(states)
-        for (key, val) in action(states[i])
-            if haskey(positions,key)
-                push!(I, positions[key])
-                push!(J, i)
-                push!(V, val)
-            end
-        end
-    end
-
-    matrix = sparse(I, J, V, length(states), length(states))
-    return EDOperator(lattice, matrix, L_max, universe)
-end
-
 """
 `EDMass(lattice)`
 Computes the mass operator ∑ (-1)ⁿ χ†ₙχₙ for the Schwinger model.
