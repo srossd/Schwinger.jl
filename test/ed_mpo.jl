@@ -31,6 +31,10 @@ using ProgressMeter
         mpo_efs = electricfields(mpo_gs)
         @test ed_efs ≈ mpo_efs rtol=1E-4
 
+        ed_avgE2 = expectation(EDAverageElectricField(lat; power=2), ed_gs)
+        mpo_avgE2 = expectation(MPOAverageElectricField(lat; power=2), mpo_gs)
+        @test ed_avgE2 ≈ mpo_avgE2 rtol=1E-4
+
         if lat.periodic
             ed_wilson = expectation(EDWilsonLoop(lat), ed_gs)
             mpo_wilson = expectation(MPOWilsonLoop(lat), mpo_gs)

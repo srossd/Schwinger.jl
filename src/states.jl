@@ -31,7 +31,7 @@ function lattice(state::SchwingerBasisState{N,F}) where {N,F}
 end
 
 """
-`basis(lattice; L_max, q, universe)`
+`schwingerbasis(lattice; L_max, q, universe)`
 
 Returns a basis of Schwinger model states.
 
@@ -41,7 +41,7 @@ Returns a basis of Schwinger model states.
 - `q::Int`
 - `universe::Int`
 """
-@memoize function basis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
+@memoize function schwingerbasis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
     if !isnothing(L_max) && L_max < 0
         throw(ArgumentError("L_max must be non-negative"))
     end
@@ -69,7 +69,7 @@ Returns a basis of Schwinger model states.
 end
 
 @memoize function positionindex(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
-    states = basis(lattice; L_max = L_max, q = lattice.q, universe = universe)
+    states = schwingerbasis(lattice; L_max = L_max, q = lattice.q, universe = universe)
     return Dict{Tuple{BitMatrix,Int},Int}((states[i].occupations, states[i].L₀) => i for i in eachindex(states))
 end
 
@@ -91,6 +91,14 @@ function lattice(state::SchwingerEDState{N,F}) where {N,F}
     return state.hamiltonian.lattice
 end
 
+function Base.:*(scalar::Number, state::SchwingerEDState{N,F}) where {N,F}
+    return SchwingerEDState(state.hamiltonian, scalar * state.coeffs)
+end
+
+function Base.:*(state::SchwingerEDState{N,F}, scalar::Number) where {N,F}
+    return scalar * state
+end
+
 """
 `SchwingerMPSState{N,F}(hamiltonian, psi)`
 
@@ -107,6 +115,14 @@ end
 
 function lattice(state::SchwingerMPS{N,F}) where {N,F}
     return state.hamiltonian.lattice
+end
+
+function Base.:*(scalar::Number, state::SchwingerMPS{N,F}) where {N,F}
+    return SchwingerMPS(state.hamiltonian, scalar * state.psi)
+end
+
+function Base.:*(state::SchwingerMPS{N,F}, scalar::Number) where {N,F}
+    return scalar * state
 end
 
 """
@@ -145,13 +161,22 @@ function loweststates(hamiltonian::MPOOperator{N,F}, nstates::Int;
     return states
 end
 
+"""
+`lowest_states(hamiltonian, nstates)`
+
+Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
+
+# Arguments
+- `hamiltonian::EDOperator`: Schwinger model Hamiltonian.
+- `nstates::Int`:: number of states to determine.
+"""
 function loweststates(hamiltonian::EDOperator, nstates::Int; ncv::Int = max(20, 2*nstates + 1))
     _, vecs = if nstates + 2 < size(hamiltonian.matrix)[1]
         try
             Arpack.eigs(hamiltonian.matrix; nev=nstates, ncv = ncv, which=:SR)
         catch e
             if e isa Arpack.XYAUPD_Exception
-                @warn "Arpack.eigs failed to converge, increasing ncv to $(2*ncv)"
+                @info "Arpack.eigs failed to converge, increasing ncv to $(2*ncv)"
                 return loweststates(hamiltonian, nstates; ncv = 2*ncv)
             else
                 rethrow(e)
@@ -196,7 +221,14 @@ Return the expectation value of the operator `op` in `state`.
 - `state::SchwingerEDState`: state.
 """
 function expectation(op::EDOperator{N,F}, state::SchwingerEDState{N,F}) where {N,F}
-    return dot(state.coeffs, op.matrix * state.coeffs)
+    if op.L_max != state.hamiltonian.L_max
+        throw(ArgumentError("Operator L_max $(op.L_max) does not match state L_max $(state.hamiltonian.L_max)"))
+    end
+    if op.universe != state.hamiltonian.universe
+        throw(ArgumentError("Operator universe $(op.universe) does not match state universe $(state.hamiltonian.universe)"))
+    end
+
+    return dot(state.coeffs, op.matrix * state.coeffs)/real(dot(state, state))
 end
 
 """
@@ -209,7 +241,80 @@ Return the expectation value of the operator `op` in `state`.
 - `state::SchwingerMPS`: state.
 """
 function expectation(op::MPOOperator{N,F}, state::SchwingerMPS{N,F}) where {N,F}
-    return inner(state.psi', op.mpo, state.psi)
+    if op.L_max != state.hamiltonian.L_max
+        throw(ArgumentError("Operator L_max $(op.L_max) does not match state L_max $(state.hamiltonian.L_max)"))
+    end
+    if op.universe != state.hamiltonian.universe
+        throw(ArgumentError("Operator universe $(op.universe) does not match state universe $(state.hamiltonian.universe)"))
+    end
+
+    return inner(state.psi', op.mpo, state.psi)/real(dot(state, state))
+end
+
+"""
+`dot(psi1::SchwingerEDState, psi2::SchwingerEDState)`
+
+Return the inner product of two Schwinger model states.
+
+# Arguments
+- `psi1::SchwingerEDState`: state.
+- `psi2::SchwingerEDState`: state.
+"""
+function LinearAlgebra.dot(psi1::SchwingerEDState{N,F}, psi2::SchwingerEDState{N,F}) where {N,F}
+    return dot(psi1.coeffs, psi2.coeffs)
+end
+
+"""
+`dot(psi1::SchwingerMPS, psi2::SchwingerMPS)`
+
+Return the inner product of two Schwinger model states.
+
+# Arguments
+- `psi1::SchwingerMPS`: state.
+- `psi2::SchwingerMPS`: state.
+"""
+function LinearAlgebra.dot(psi1::SchwingerMPS{N,F}, psi2::SchwingerMPS{N,F}) where {N,F}
+    return inner(psi1.psi, psi2.psi)
+end
+
+"""
+`act(op, state)`
+
+Apply the operator `op` to the state `state`.
+
+# Arguments
+- `op::MPOOperator{N,F}`: operator.
+- `state::SchwingerMPS{N,F}`: state.
+"""
+function act(op::MPOOperator{N,F}, state::SchwingerMPS{N,F}) where {N,F}
+    if op.L_max != state.hamiltonian.L_max
+        throw(ArgumentError("Operator L_max $(op.L_max) does not match state L_max $(state.hamiltonian.L_max)"))
+    end
+    if op.universe != state.hamiltonian.universe
+        throw(ArgumentError("Operator universe $(op.universe) does not match state universe $(state.hamiltonian.universe)"))
+    end
+
+    return SchwingerMPS(state.hamiltonian, apply(op.mpo, state.psi))
+end
+
+"""
+`act(op, state)`
+
+Apply the operator `op` to the state `state`.
+
+# Arguments
+- `op::EDOperator{N,F}`: operator.
+- `state::SchwingerEDState{N,F}`: state.
+"""
+function act(op::EDOperator{N,F}, state::SchwingerEDState{N,F}) where {N,F}
+    if op.L_max != state.hamiltonian.L_max
+        throw(ArgumentError("Operator L_max $(op.L_max) does not match state L_max $(state.hamiltonian.L_max)"))
+    end
+    if op.universe != state.hamiltonian.universe
+        throw(ArgumentError("Operator universe $(op.universe) does not match state universe $(state.hamiltonian.universe)"))
+    end
+
+    return SchwingerEDState(state.hamiltonian, op.matrix * state.coeffs)
 end
 
 """
@@ -276,12 +381,12 @@ Return an NxF matrix of the expectations of χ†χ operators on each site.
 - `state::SchwingerBasisState`: Schwinger model basis state.
 """
 function occupations(state::SchwingerEDState{N,F}) where {N,F}
-    states = basis(state.hamiltonian.lattice; L_max = state.hamiltonian.L_max)
+    states = schwingerbasis(state.hamiltonian.lattice; L_max = state.hamiltonian.L_max)
     occs = zeros(N,F)
     for (coeff, state) in zip(state.coeffs, states)
-        occs .+= abs2(coeff) .* occupations(state)
+        occs .+= real(abs2(coeff)) .* occupations(state)
     end
-    return occs
+    return occs/real(dot(state, state))
 end
 
 """
@@ -346,7 +451,7 @@ function L₀(state::SchwingerMPS{N,F}) where {N,F}
 end
 
 function L₀(state::SchwingerEDState{N,F}) where {N,F}
-    states = basis(lattice(state); L_max = state.hamiltonian.L_max, q = lattice(state).q)
+    states = schwingerbasis(lattice(state); L_max = state.hamiltonian.L_max, q = lattice(state).q)
     return sum(abs2(coeff) * L₀(state) for (coeff, state) in zip(state.coeffs, states))
 end
 
