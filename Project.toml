@@ -18,7 +18,7 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 [compat]
 Arpack = "0.5.3"
 Combinatorics = "^1.0"
-ITensorMPS = "^0.2"
+ITensorMPS = "^0.2, 0.3"
 ITensors = "^0.6"
 KrylovKit = "0.8.3"
 LinearAlgebra = "^1.8"
