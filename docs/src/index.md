@@ -26,20 +26,23 @@ using Schwinger
 using Base.MathConstants
 using Plots
 
-function avgE(θ2π)
-    lat = SchwingerLattice{10,1}(θ2π = θ2π, m = 0.1, periodic = true)
+function avgE(θ2π, m, shift = true)
+    lat = shift ? SchwingerLattice{10,1}(θ2π = θ2π, m = m, periodic = true) : SchwingerLattice{10,1}(θ2π = θ2π, mlat = m, periodic = true)
     gs = groundstate(EDHamiltonian(lat))
-    return mean(electricfields(gs))
+    return real(expectation(EDAverageElectricField(lat), gs))
 end
 
-θ2πs = 0:0.025:0.5
-avgEs = map(avgE, θ2πs)
+m = 0.05
+θ2πs = 0:0.025:1
+avgEs_shift = map(x -> avgE(x, m), θ2πs)
+avgEs_noshift = map(x -> avgE(x, m, false), θ2πs)
 
 # See eq (24) of https://arxiv.org/abs/2206.05308
-exact = (exp(γ)/√(π))*m*sin(2π*θ2πs) - (8.9139*exp(2γ)/(4π))*(m^2)*sin(4π*θ2πs)
+perturbative = [(exp(γ)/√(π))*m*sin(2π*θ2π) - (8.9139*exp(2γ)/(4π))*(m^2)*sin(4π*θ2π) for θ2π in θ2πs]
 
-plot(θ2πs, avgEs, label="Schwinger.jl", xlabel="θ/2π", ylabel="Average Electric Field", legend=:top)
-plot!(θ2πs, exact, label="Exact", linestyle=:dash)
+scatter(θ2πs, avgEs_shift, label="With mass shift", xlabel="θ/2π", ylabel="Average Electric Field", legend=:topright, color=:orange)
+scatter!(θ2πs, avgEs_noshift, label="Without mass shift", xlabel="θ/2π", ylabel="Average Electric Field", color="lightblue")
+plot!(θ2πs, perturbative, label="Perturbative", color=:black)
 ```
 
 Here is an example of calculating the expectation value of the square of the mean electric field in the two-flavor Schwinger model at $\theta = \pi$, for a four-site periodic lattice, giving a very rough look at the [phase diagram](https://arxiv.org/abs/2305.04437).
