@@ -1,12 +1,17 @@
 module Schwinger
 
 export SchwingerLattice
+export SchwingerState, SchwingerBasisState, SchwingerEDState, SchwingerMPS
+export SchwingerOperator, EDOperator, MPOOperator
 export basis, EDHamiltonian, MPOHamiltonian
 export expectation, EDWilsonLoop, MPOWilsonLoop, EDWilsonLine, MPOWilsonLine
+export EDGaugeKinetic, EDMass, EDHopping, EDHoppingMass
+export MPOGaugeKinetic, MPOMass, MPOHopping, MPOHoppingMass
 export EDAverageElectricField, MPOAverageElectricField
 export loweststates, groundstate, energygap
-export energy, occupations, charges, electricfields, entanglements, scalarvev, pseudoscalarvev
-export act, evolve
+export energy, occupations, charges, L₀, electricfields, entanglements, scalarvev, pseudoscalarvev
+export expectation, act
+export evolve
 
 using ITensors, ITensorMPS
 using Observers

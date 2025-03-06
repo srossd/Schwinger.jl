@@ -8,7 +8,7 @@ Computes the mass operator ∑ (-1)ⁿ χ†ₙχₙ for the Schwinger model.
 @memoize function EDMass(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
     function massenergy(state::SchwingerBasisState{N,F})
         occs = occupations(state)
-        return [(occs, L₀(state)) => sum((-1)^(j-1) * (bare ? 1 : state.lattice.mlat[j][k]) * occs[j,k] for j=1:N, k=1:F)]
+        return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j][k]) * occs[j,k] for j=1:N, k=1:F)]
     end
     return constructoperator(lattice, massenergy; L_max = L_max, universe = universe)
 end
@@ -139,17 +139,20 @@ function opsum_gaugekinetic(lattice::SchwingerLattice{N,F}; universe::Int = 0, b
         term += q^2 * N,"L0",N * F + 1,"L0",N * F + 1
         term += 2q * sum(θ2πu),"L0",N * F + 1
 
-        term += q^2 * N * F / 2,"L0",N * F + 1
+        term += -q^2 * N * F / 2,"L0",N * F + 1
         
         for j in 1:N
             for k in 1:F
                 ind = F*(j - 1) + k
-                term += 2q^2 * (N - j),"L0",N * F + 1,"Sz",ind
+                term += 2q^2 * (N + 1 - j),"L0",N * F + 1,"Sz",ind
             end
         end
     end
+
     term += sum(θ2πu .^ 2),"Id",1
-    term += q * F / 2 * sum(θ2πu),"Id",1
+    term += -q * F / 2 * sum(θ2πu),"Id",1
+    term += q^2 * N * F * F / 8,"Id",1
+
     for j in 1:N-1
         for k in 1:F
             ind = F*(j - 1) + k
@@ -157,11 +160,10 @@ function opsum_gaugekinetic(lattice::SchwingerLattice{N,F}; universe::Int = 0, b
         end
     end
 
-    term += q^2 * N * F * F / 8,"Id",1
     for j in 1:N
         for k in 1:F
             ind = F*(j - 1) + k
-            term += q^2 * F * ((N + 1 - j) ÷ 2),"Sz",ind
+            term += -q^2 * F * ((N + 1 - j) ÷ 2),"Sz",ind
         end
     end
 
@@ -180,20 +182,16 @@ function opsum_gaugekinetic(lattice::SchwingerLattice{N,F}; universe::Int = 0, b
     return (bare ? 1 : a/2)*term
 end
 
+"""
+`MPOGaugeKinetic(lattice)`
+
+Computes the MPO gauge kinetic operator for the Schwinger model.
+
+# Arguments
+- `lattice::SchwingerLattice`: Schwinger model lattice.
+"""
 @memoize function MPOGaugeKinetic(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
-    if !isnothing(L_max) && L_max < 0
-        throw(ArgumentError("L_max must be non-negative"))
-    end
-    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
-        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
-    end
-
-    universe = mod(universe, lattice.q)
-    if universe < 0
-        universe += q
-    end
-
-    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_gaugekinetic(lattice; universe = universe, bare = bare)
     mpo = MPO(opsum, sites(lattice; L_max = L_max))
@@ -207,27 +205,23 @@ function opsum_mass(lattice::SchwingerLattice{N,F}; bare::Bool = true) where {N,
     for j in 1:N
         for k in 1:F
             ind = F*(j - 1) + k
-            term += (bare ? 1 : mlat[j][k]) * ((-1) ^ (j - 1)),"Sz",ind
+            term += (bare ? 1 : mlat[j][k]) * ((-1) ^ j),"Sz",ind
         end
     end
 
     return term
 end
 
+"""
+`MPOMass(lattice)`
+
+Computes the MPO mass operator for the Schwinger model.
+
+# Arguments
+- `lattice::SchwingerLattice`: Schwinger model lattice.
+"""
 @memoize function MPOMass(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
-    if !isnothing(L_max) && L_max < 0
-        throw(ArgumentError("L_max must be non-negative"))
-    end
-    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
-        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
-    end
-
-    universe = mod(universe, lattice.q)
-    if universe < 0
-        universe += q
-    end
-
-    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_mass(lattice; bare = bare)
     mpo = MPO(opsum, sites(lattice; L_max = L_max))
@@ -263,20 +257,16 @@ function opsum_hopping(lattice::SchwingerLattice{N,F}; bare::Bool = true) where 
     return (bare ? 1 : 1/(2a)) * term
 end
 
+"""
+`MPOHopping(lattice)`
+
+Computes the MPO hopping operator for the Schwinger model.
+
+# Arguments
+- `lattice::SchwingerLattice`: Schwinger model lattice.
+"""
 @memoize function MPOHopping(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
-    if !isnothing(L_max) && L_max < 0
-        throw(ArgumentError("L_max must be non-negative"))
-    end
-    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
-        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
-    end
-
-    universe = mod(universe, lattice.q)
-    if universe < 0
-        universe += q
-    end
-
-    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_hopping(lattice; bare = bare)
     mpo = MPO(opsum, sites(lattice; L_max = L_max))
@@ -312,20 +302,16 @@ function opsum_hoppingmass(lattice::SchwingerLattice{N,F}; bare::Bool = false) w
     return term
 end
 
+"""
+`MPOHoppingMass(lattice)`
+
+Computes the MPO hopping-mass operator for the Schwinger model.
+
+# Arguments
+- `lattice::SchwingerLattice`: Schwinger model lattice.
+"""
 @memoize function MPOHoppingMass(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
-    if !isnothing(L_max) && L_max < 0
-        throw(ArgumentError("L_max must be non-negative"))
-    end
-    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
-        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
-    end
-
-    universe = mod(universe, lattice.q)
-    if universe < 0
-        universe += q
-    end
-
-    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_hoppingmass(lattice; bare = bare)
     mpo = MPO(opsum, sites(lattice; L_max = L_max))
@@ -341,19 +327,7 @@ Computes the MPO Hamiltonian for the Schwinger model.
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
 @memoize function MPOHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0) where {N,F}
-    if !isnothing(L_max) && L_max < 0
-        throw(ArgumentError("L_max must be non-negative"))
-    end
-    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
-        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
-    end
-
-    universe = mod(universe, lattice.q)
-    if universe < 0
-        universe += q
-    end
-
-    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     hamiltonian =   opsum_gaugekinetic(lattice; bare = false) + 
                     opsum_mass(lattice; bare = false) + 

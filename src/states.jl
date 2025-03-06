@@ -1,3 +1,8 @@
+"""
+`SchwingerState{N,F}`
+
+Abstract type for Schwinger model states.
+"""
 abstract type SchwingerState{N,F} end
 
 """
@@ -41,35 +46,33 @@ Returns a basis of Schwinger model states.
 - `q::Int`
 - `universe::Int`
 """
-@memoize function schwingerbasis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
+@memoize function schwingerbasis(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
     if !isnothing(L_max) && L_max < 0
         throw(ArgumentError("L_max must be non-negative"))
     end
     if !isnothing(L_max) && L_max > 0 && !lattice.periodic
         throw(ArgumentError("L_max must be 0 for open boundary conditions"))
     end
-    if q < 1
-        throw(ArgumentError("q must be ≥ 1"))
-    end
 
     L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+
     states = Vector{SchwingerBasisState{N,F}}(undef, nstates(N, F; L_max = L_max))
     stateidx = 1
-    for L₀ in ((-L_max:L_max) .* q) .+ universe
+    for L₀ in ((-L_max:L_max) .* lattice.q) .+ universe
         for comb in combinations(1:N*F, N*F÷2)
             occupations = BitMatrix(undef, N, F)
             for idx in comb
                 occupations[idx] = true
             end
-            states[stateidx] = SchwingerBasisState(lattice, occupations, L₀, q)
+            states[stateidx] = SchwingerBasisState(lattice, occupations, L₀, lattice.q)
             stateidx += 1
         end
     end
     return states
 end
 
-@memoize function positionindex(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, q::Int = 1, universe::Int = 0) where {N,F}
-    states = schwingerbasis(lattice; L_max = L_max, q = lattice.q, universe = universe)
+@memoize function positionindex(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
+    states = schwingerbasis(lattice; L_max = L_max, universe = universe)
     return Dict{Tuple{BitMatrix,Int},Int}((states[i].occupations, states[i].L₀) => i for i in eachindex(states))
 end
 
@@ -297,6 +300,10 @@ function act(op::MPOOperator{N,F}, state::SchwingerMPS{N,F}) where {N,F}
     return SchwingerMPS(state.hamiltonian, apply(op.mpo, state.psi))
 end
 
+function Base.:*(op::MPOOperator{N,F}, state::SchwingerMPS{N,F}) where {N,F}
+    return act(op, state)
+end
+
 """
 `act(op, state)`
 
@@ -315,6 +322,10 @@ function act(op::EDOperator{N,F}, state::SchwingerEDState{N,F}) where {N,F}
     end
 
     return SchwingerEDState(state.hamiltonian, op.matrix * state.coeffs)
+end
+
+function Base.:*(op::EDOperator{N,F}, state::SchwingerEDState{N,F}) where {N,F}
+    return act(op, state)
 end
 
 """
@@ -342,7 +353,7 @@ function energy(state::SchwingerBasisState{N,F}) where {N,F}
     occs = occupations(state)
 
     electricenergy = (state.lattice.a/2) * sum(efs.^2)
-    massenergy = sum((-1)^(j-1) * state.lattice.mlat[j][k] * occs[j,k] for j=1:N, k=1:F)
+    massenergy = sum((-1)^j * state.lattice.mlat[j][k] * occs[j,k] for j=1:N, k=1:F)
 
     return electricenergy + massenergy
 end
@@ -357,7 +368,7 @@ Return an NxF matrix of the expectations of χ†χ operators on each site.
 """
 function occupations(state::SchwingerMPS{N,F}) where {N,F}
     psi = state.psi
-    return transpose(reshape(expect(psi, "Sz", sites=1:N*F) + [1/2 for n=1:N*F], (F,N)))
+    return transpose(reshape(expect(psi, "Sz", sites=1:N*F) .+ 1/2, (F,N)))
 end
 
 """
@@ -398,8 +409,8 @@ Return the VEV of the scalar condensate L⁻¹ ∑ (-1)ⁿ χ†ₙχₙ
 - `state::SchwingerState`: Schwinger model state.
 """
 function scalarvev(state::SchwingerState{N,F}) where {N,F}
-    occs = occupations(state)[:,1]
-    return (repeat([1,-1],N÷2)'occs)/lattice(state).L
+    occs = sum(occupations(state), dims=2)
+    return sum(repeat([-1,1],N÷2) .* occs)/lattice(state).L
 end
 
 """
@@ -431,7 +442,7 @@ Return a list of the expectations of Q operators on each site and for each known
 - `state::SchwingerState`: Schwinger model state.
 """
 function charges(state::SchwingerState{N,F}) where {N,F}
-    return (sum(occupations(state), dims=2) + (F .* [-1/2 + (-1)^(n - 1)/2 for n=1:N])) .* lattice(state).q
+    return (sum(occupations(state), dims=2) + (F .* [-1/2 + (-1)^(n)/2 for n=1:N])) .* lattice(state).q
 end
 
 """
@@ -451,7 +462,7 @@ function L₀(state::SchwingerMPS{N,F}) where {N,F}
 end
 
 function L₀(state::SchwingerEDState{N,F}) where {N,F}
-    states = schwingerbasis(lattice(state); L_max = state.hamiltonian.L_max, q = lattice(state).q)
+    states = schwingerbasis(lattice(state); L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
     return sum(abs2(coeff) * L₀(state) for (coeff, state) in zip(state.coeffs, states))
 end
 
@@ -467,7 +478,7 @@ function electricfields(state::SchwingerState{N,F}) where {N,F}
     lat = lattice(state)
     Qs = charges(state)
 
-    return circshift(accumulate(+, Qs) .+ L₀(state),1) .+ lat.θ2π
+    return accumulate(+, Qs) .+ L₀(state) .+ lat.θ2π
 end
 
 """
@@ -479,10 +490,10 @@ Return a list of the entanglement entropies for each bisection of the lattice.
 - `state::SchwingerMPS`: Schwinger model state.
 """
 function entanglements(state::SchwingerMPS{N,F}) where {N,F}
-    data = Vector{Float64}(undef, N*F - (lattice.periodic ? 0 : 1))
+    data = Vector{Float64}(undef, N*F - (lattice(state).periodic ? 0 : 1))
     psi = state.psi
 
-    for j=1:N*F - (lattice.periodic ? 0 : 1)
+    for j=1:N*F - (lattice(state).periodic ? 0 : 1)
         orthogonalize!(psi, j)
         _,S,_ = svd(psi[j], (linkinds(psi, j-1)..., siteinds(psi,j)...))
         for n=1:dim(S, 1)

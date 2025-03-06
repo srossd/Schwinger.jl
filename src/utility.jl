@@ -49,22 +49,10 @@ function sites(hamiltonian::MPOOperator{N,F}) where {N,F}
 end
 
 function constructoperator(lattice::SchwingerLattice{N,F}, action::Function; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
-    if !isnothing(L_max) && L_max < 0
-        throw(ArgumentError("L_max must be non-negative"))
-    end
-    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
-        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
-    end
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
-    universe = mod(universe, lattice.q)
-    if universe < 0
-        universe += q
-    end
-
-    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
-
-    states = schwingerbasis(lattice; L_max = L_max, q = lattice.q, universe = universe)
-    positions = positionindex(lattice; L_max = L_max, q = lattice.q, universe = universe)
+    states = schwingerbasis(lattice; L_max = L_max, universe = universe)
+    positions = positionindex(lattice; L_max = L_max, universe = universe)
 
     I = Vector{Int}()
     J = Vector{Int}()
@@ -81,4 +69,22 @@ function constructoperator(lattice::SchwingerLattice{N,F}, action::Function; L_m
 
     matrix = sparse(I, J, V, length(states), length(states))
     return EDOperator(lattice, matrix, L_max, universe)
+end
+
+function process_L_max_universe(lattice::SchwingerLattice, L_max::Union{Nothing,Int}, universe::Int)
+    if !isnothing(L_max) && L_max < 0
+        throw(ArgumentError("L_max must be non-negative"))
+    end
+    if !isnothing(L_max) && L_max > 0 && !lattice.periodic
+        throw(ArgumentError("L_max must be 0 for open boundary conditions"))
+    end
+
+    universe = mod(universe, lattice.q)
+    if universe < 0
+        universe += lattice.q
+    end
+
+    L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+
+    return L_max, universe
 end

@@ -1,13 +1,17 @@
 """
-`SchwingerLattice(N, F; periodic=false, L_max=0)`
+`SchwingerLattice{N,F}(;kwargs...)`
 
 Constructs a SchwingerLattice for the Schwinger model.
 
 # Arguments
-- `N::Int`: Number of sites.
-- `F::Int`: Number of flavors.
 - `periodic::Bool=false`: Whether the lattice is periodic.
-- `L_max::Int=0`: Maximum absolute value for L_0 when periodic.
+- `q::Int=1`: Charge.
+- `L::Union{Nothing,Real}=nothing`: Length of the lattice.
+- `a::Union{Nothing,Real}=nothing`: Lattice spacing.
+- `m::Union{Real,NTuple{N,Real},NTuple{F,Real},NTuple{N,NTuple{F,Real}}=0.`: Mass parameter.
+- `mlat::Union{Nothing,Real,NTuple{N,Real},NTuple{F,Real},NTuple{N,NTuple{F,Real}}=nothing`: Local mass parameter.
+- `mprime::Union{Real,NTuple{N,Real},NTuple{F,Real},NTuple{N,NTuple{F,Real}}=0.`: Prime mass parameter.
+- `θ2π::Union{Real,NTuple{N,Real}}=0.`: Theta angle.
 
 # Returns
 A `SchwingerLattice` object.
@@ -40,6 +44,9 @@ struct SchwingerLattice{N,F}
         end
         if F < 1
             throw(DomainError(F, "Number of flavors must be ≥ 1."))
+        end
+        if q < 1
+            throw(DomainError(q, "Charge must be ≥ 1."))
         end
 
         if isnothing(a) && isnothing(L)
