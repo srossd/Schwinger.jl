@@ -5,6 +5,11 @@ push!(LOAD_PATH,"../src/")
 makedocs(sitename="Schwinger.jl Documentation",
          pages = [
             "Index" => "index.md",
+            "Manual" => ["man/lattices.md",
+                        "man/hamiltonian.md",
+                        "man/states.md",
+                        "man/operators.md",
+                        "man/timeevolution.md"]
          ],
          format = Documenter.HTML(prettyurls = false)
 )

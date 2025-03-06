@@ -5,7 +5,7 @@ A package for working with the Hamiltonian lattice Schwinger model.
 ## Table of contents
 
 ```@contents
-Pages = ["home.md", "man/lattices.md", "man/hamiltonian.md", "man/states.md", "man/operators.md", "timeevolution.md"]
+Pages = ["home.md", "man/lattices.md", "man/hamiltonian.md", "man/states.md", "man/operators.md", "man/timeevolution.md"]
 Depth = 4
 ```
 

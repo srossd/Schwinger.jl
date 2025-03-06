@@ -9,9 +9,13 @@ using Schwinger, Plots
 lat = SchwingerLattice{10,1}(L = 2, periodic = true)
 gs = groundstate(EDHamiltonian(lat))
 
-_, df = evolve(EDWilsonLoop(lat) * gs, 10; nsteps = 30, observable = (ψ, t) -> sum(electricfields(ψ))/10)
+_, df = evolve(EDWilsonLoop(lat) * gs, 15; 
+    nsteps = 30, 
+    observable = (ψ, t) -> sum(electricfields(ψ))/10
+)
 
-scatter!(df.time, df.observable, xlabel = "gt", ylabel = "Average electric field")
+scatter(df.time, df.observable, xlabel = "gt", ylabel = "Average electric field", label = "Schwinger.jl")
+plot!(0:.1:15, [cos(t/√(π)) for t in 0:.1:15], label = "Exact")
 ```
 
 ```@docs
