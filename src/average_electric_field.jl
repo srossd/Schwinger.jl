@@ -8,10 +8,20 @@ Construct an `EDOperator` that computes the average electric field (raised to so
 - `power::Int=1`: The power to raise the electric field to.
 - `L_max::Union{Nothing,Int}=nothing`: The maximum absolute value of L₀.
 - `universe::Int=0`: The universe to compute the average electric field in.
+- `sitelist::Union{Nothing,Vector{Int}}=nothing`: List of sites to average over.
 """
-function EDAverageElectricField(lattice::SchwingerLattice{N,F}; power::Int = 1, L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
+function EDAverageElectricField(lattice::SchwingerLattice{N,F}; power::Int = 1, L_max::Union{Nothing,Int} = nothing, universe::Int = 0, sitelist::Union{Nothing,Vector{Int}} = nothing) where {N,F}
+    if isnothing(sitelist)
+        sitelist = collect(1:N)
+    else
+        if !all(x -> 1 <= x <= N, sitelist) || length(unique(sitelist)) != length(sitelist) && length(sitelist) < 1
+            throw(ArgumentError("sitelist must be between 1 and $(N), unique and non-empty"))
+        end
+    end
+    nsites = length(sitelist)
+
     function averagefield(state::SchwingerBasisState{N,F})
-        return [(occupations(state), L₀(state)) => mean(electricfields(state))^power]
+        return [(occupations(state), L₀(state)) => (sum(electricfields(state)[sitelist])/nsites)^power]
     end
 
     return constructoperator(lattice, averagefield; L_max = L_max, universe = universe)
@@ -27,14 +37,23 @@ Construct an `MPOOperator` that computes the average electric field (raised to s
 - `power::Int=1`: The power to raise the electric field to.
 - `L_max::Union{Nothing,Int}=nothing`: The maximum absolute value of L₀.
 - `universe::Int=0`: The universe to compute the average electric field in.
+- `sitelist::Union{Nothing,Vector{Int}}=nothing`: List of sites to average over.
 """
-function MPOAverageElectricField(lattice::SchwingerLattice{N,F}; power::Int = 1, L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
+function MPOAverageElectricField(lattice::SchwingerLattice{N,F}; power::Int = 1, L_max::Union{Nothing,Int} = nothing, universe::Int = 0, sitelist::Union{Nothing,Vector{Int}} = nothing) where {N,F}
     if !isnothing(L_max) && L_max < 0
         throw(ArgumentError("L_max must be non-negative"))
     end
     if !isnothing(L_max) && L_max > 0 && !lattice.periodic
         throw(ArgumentError("L_max must be 0 for open boundary conditions"))
     end
+    if isnothing(sitelist)
+        sitelist = collect(1:N)
+    else
+        if !all(x -> 1 <= x <= N, sitelist) || length(unique(sitelist)) != length(sitelist) && length(sitelist) < 1
+            throw(ArgumentError("sitelist must be between 1 and $(N), unique and non-empty"))
+        end
+    end
+    nsites = length(sitelist)
 
     universe = mod(universe, lattice.q)
     if universe < 0
@@ -49,12 +68,12 @@ function MPOAverageElectricField(lattice::SchwingerLattice{N,F}; power::Int = 1,
     if lattice.periodic
         opsum += 1,"L0",N*F+1
     end
-    opsum += mean(θ2πu)-lattice.q*F/4,"Id",1 # -q*F/4 to account for shift terms in the Gauss law not included below
+    opsum += sum(θ2πu[s] - lattice.q * F/2 * isodd(s) for s = sitelist) / nsites,"Id",1 
 
     for j in 1:N
         for f in 1:F
             ind = F*(j-1)+f
-            opsum += lattice.q*(N-j)/N,"Sz",ind
+            opsum += lattice.q*sum(j <= s for s = sitelist) / nsites,"Sz",ind
         end
     end
 

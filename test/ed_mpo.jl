@@ -1,4 +1,4 @@
-using ProgressMeter
+using ProgressMeter, StatsBase
 
 @testset "Ground state and gap" begin
     @showprogress desc="ED vs MPO" for lat in [
@@ -38,6 +38,11 @@ using ProgressMeter
         ed_avgE2 = expectation(EDAverageElectricField(lat; power=2), ed_gs)
         mpo_avgE2 = expectation(MPOAverageElectricField(lat; power=2), mpo_gs)
         @test ed_avgE2 ≈ mpo_avgE2 rtol=1E-4
+
+        sitelist = sample(1:lat.N, rand(1:lat.N), replace=false)
+        ed_avgE2_sub = real(expectation(EDAverageElectricField(lat; power=2, sitelist=sitelist), ed_gs))
+        mpo_avgE2_sub = real(expectation(MPOAverageElectricField(lat; power=2, sitelist=sitelist), mpo_gs))
+        @test ed_avgE2_sub ≈ mpo_avgE2_sub rtol=1E-4
 
         if lat.periodic
             ed_wilson = expectation(EDWilsonLoop(lat), ed_gs)
