@@ -422,11 +422,11 @@ Return the VEV of the pseudoscalar condensate L⁻¹ ∑ (-1)ⁿ χ†ₙχₙ
 - `state::SchwingerState`: Schwinger model state.
 """
 function pseudoscalarvev(state::SchwingerMPS{N,F}) where {N,F}
-    return real(expectation(MPOHoppingMass(lattice(state); bare = true), state)/lattice(state).L)
+    return real(expectation(MPOHoppingMass(lattice(state); bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe), state)/lattice(state).L)
 end
 
 function pseudoscalarvev(state::SchwingerEDState{N,F}) where {N,F}
-    return real(expectation(EDHoppingMass(lattice(state); bare = true), state)/lattice(state).L)
+    return real(expectation(EDHoppingMass(lattice(state); bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe), state)/lattice(state).L)
 end
 
 function pseudoscalarvev(state::SchwingerBasisState{N,F}) where {N,F}
@@ -454,7 +454,7 @@ Return the expectation value of L₀.
 - `state::SchwingerState`: Schwinger model state.
 """
 function L₀(state::SchwingerBasisState{N,F}) where {N,F}
-    return lattice(state).periodic ? state.L₀ : 0
+    return state.L₀
 end
 
 function L₀(state::SchwingerMPS{N,F}) where {N,F}

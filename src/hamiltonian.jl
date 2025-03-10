@@ -100,7 +100,7 @@ Computes the hopping-type mass term i/2 ∑(-1)^n (χ†ₙ₊₁ χₙ + χ†�
                             sign *= parities[k]
                         end
 
-                       hops[(hopoccupations, hopL₀)] = sign*(-1)^j*1im/2*(bare ? 1 : lattice.mprime[j][k])
+                       hops[(hopoccupations, hopL₀)] = sign*(-1)^(j)*1im*(bare ? 1 : lattice.mprime[j][k])
                     end
                 end
             end
@@ -280,8 +280,8 @@ function opsum_hoppingmass(lattice::SchwingerLattice{N,F}; bare::Bool = false) w
     for j in 1:N-1
         for k in 1:F
             ind = F*(j - 1) + k
-            term += (bare ? 1/2 : mprime[j][k]/2)*(-1)^(j),"S+",ind,"S-",ind + F
-            term += (bare ? 1/2 : mprime[j][k]/2)*(-1)^(j),"S-",ind,"S+",ind + F
+            term += (bare ? 1 : mprime[j][k])*(-1)^(j),"S+",ind,"S-",ind + F
+            term += (bare ? 1 : mprime[j][k])*(-1)^(j),"S-",ind,"S+",ind + F
         end
     end
 
@@ -290,11 +290,11 @@ function opsum_hoppingmass(lattice::SchwingerLattice{N,F}; bare::Bool = false) w
             ind = F * (N - 1) + k
 
             if F ≤ 2 # safe to ignore fermion parity factors
-                term += (bare ? 1/2 : mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1
-                term += (bare ? 1/2 : mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1
+                term += (bare ? 1 : mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1
+                term += (bare ? 1 : mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1
             else
-                term += (2^N)*(bare ? 1/2 : mprime[N][k]/2),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
-                term += (2^N)*(bare ? 1/2 : mprime[N][k]/2),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
+                term += (2^N)*(bare ? 1 : mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
+                term += (2^N)*(bare ? 1 : mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
             end
         end
     end

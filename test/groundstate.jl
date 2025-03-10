@@ -73,3 +73,14 @@ end
         @test vev ≈ exact rtol=0.05
     end
 end
+
+@testset "Higher charge" begin
+    @showprogress desc = "Universes" for p=0:3
+        lattice = SchwingerLattice{10,1}(periodic=true, q = 4)
+        gs = groundstate(EDHamiltonian(lattice; universe = p))
+
+        arg = atan(pseudoscalarvev(gs), scalarvev(gs))
+
+        @test mod2pi(arg) ≈ mod2pi(π*(1+p/2)) atol=0.01
+    end
+end
