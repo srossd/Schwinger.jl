@@ -14,7 +14,7 @@ gs = groundstate(EDHamiltonian(lat))
 occupations(gs), electricfields(gs)
 ```
 
-With a `SchwingerMPS` state, we can evaluate the entanglement entropies of each bisection of the lattice:
+We can also evaluate the entanglement entropies of each bisection of the lattice:
 ```@example entanglement
 using Schwinger
 lat = SchwingerLattice{20,1}()

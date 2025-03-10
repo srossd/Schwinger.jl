@@ -4,7 +4,7 @@ The Hamiltonian for the lattice Schwinger model is
 ```math
 \begin{split}
 H = &\frac{(qg)^2 a}{2}\sum_{n=1}^N \left(L_n + \frac{\theta}{2\pi}\right)^2 - \frac{i}{2a}\sum_{n=1}^N\sum_{\alpha=1}^F \left(\chi^\dagger_{n,\alpha} \chi_{n+1,\alpha} - \chi^\dagger_{n+1,\alpha} \chi_{n,\alpha}\right) \\
-&+\underbrace{\left(m - \frac{(qg)^2 F a}{8}\right)}_{m_\text{lat}}\sum_{n=1}^N \sum_{\alpha=1}^F (-1)^n \chi^\dagger_{n,\alpha} \chi_{n,\alpha} + m' \sum_{n=1}^N\sum_{\alpha=1}^F (-1)^j\left(\chi^\dagger_{n-1,\alpha}\chi_{n,\alpha} + \chi^\dagger_{n+1,\alpha}\chi_{n,\alpha}\right)
+&+\underbrace{\left(m - \frac{(qg)^2 F a}{8}\right)}_{m_\text{lat}}\sum_{n=1}^N \sum_{\alpha=1}^F (-1)^n \chi^\dagger_{n,\alpha} \chi_{n,\alpha} + m' \sum_{n=1}^N\sum_{\alpha=1}^F (-1)^n\left(\chi^\dagger_{n-1,\alpha}\chi_{n,\alpha} + \chi^\dagger_{n+1,\alpha}\chi_{n,\alpha}\right)
 \end{split}
 ```
 This is supplemented by the Gauss law

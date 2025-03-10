@@ -481,26 +481,82 @@ function electricfields(state::SchwingerState{N,F}) where {N,F}
     return accumulate(+, Qs) .+ L₀(state) .+ lat.θ2π
 end
 
-"""
-`entanglements(state)`
+function partialcode(state::SchwingerBasisState{N,F}, range::UnitRange{Int}) where {N,F}
+    if range.start > N
+        return BitVector(), state.L₀
+    else
+        fermioncode = reshape(occupations(state)[range,:], (length(range)*F,))
+        if range.start > 1
+            return fermioncode, state.L₀
+        else
+            return fermioncode, 0
+        end
+    end
+end
 
-Return a list of the entanglement entropies for each bisection of the lattice.
+"""
+`entanglement(state, bisection)`
+
+Return the von Neumann entanglement entropy -tr(ρₐ log(ρₐ)), where a is the subsystem of sites 1..bisection
 
 # Arguments
-- `state::SchwingerMPS`: Schwinger model state.
+- `state::SchwingerEDState`: Schwinger model state.
+- `bisection::Int`: bisection index.
 """
-function entanglements(state::SchwingerMPS{N,F}) where {N,F}
-    data = Vector{Float64}(undef, N*F - (lattice(state).periodic ? 0 : 1))
-    psi = state.psi
+function entanglement(state::SchwingerEDState{N,F}, bisection::Int) where {N,F}
+    basis = schwingerbasis(lattice(state); L_max = state.hamiltonian.L_max)
+    range1 = bisection ≤ N/2 ? (1:bisection) : (bisection+1:N)
+    range2 = bisection ≤ N/2 ? (bisection+1:N) : (1:bisection)
+    codes = partialcode.(basis, Ref(range1)) # don't broadcast range1
+    index = Dict([code => i for (i, code) in enumerate(Set(codes))])
 
-    for j=1:N*F - (lattice(state).periodic ? 0 : 1)
-        orthogonalize!(psi, j)
-        _,S,_ = svd(psi[j], (linkinds(psi, j-1)..., siteinds(psi,j)...))
-        for n=1:dim(S, 1)
-            p = S[n,n]^2
-            data[j] -= p * log(p)
+    grouped_states = Dict{Tuple{BitVector, Int}, Vector{Int}}()
+    for (i, basis_state) in enumerate(basis)
+        key = partialcode(basis_state, range2)
+        if haskey(grouped_states, key)
+            push!(grouped_states[key], i)
+        else
+            grouped_states[key] = [i]
         end
     end
 
-    return data
+    partialtrace = zeros(ComplexF64, length(index), length(index))
+    for group in values(grouped_states)
+        for i in group
+            for j in group
+                partialtrace[index[codes[i]], index[codes[j]]] += state.coeffs[i] * conj(state.coeffs[j])
+            end
+        end
+    end
+
+    factorization = LinearAlgebra.eigen(partialtrace)
+    return -real(sum(p == 0 ? 0 : p * log(abs(p)) for p in factorization.values))
+end
+
+"""
+`entanglement(state, bisection)`
+
+Return the von Neumann entanglement entropy -tr(ρₐ log(ρₐ)), where a is the subsystem of sites 1..bisection
+
+# Arguments
+- `state::SchwingerMPS`: Schwinger model state.
+- `bisection::Int`: bisection index.
+"""
+function entanglement(state::SchwingerMPS{N,F}, bisection::Int) where {N,F}
+    psi = state.psi
+    orthogonalize!(psi, bisection*F)
+    _,S,_ = svd(psi[bisection*F], (linkinds(psi, bisection*F-1)..., siteinds(psi,bisection*F)...))
+    return -sum(p * log(p) for p in diag(S) .^ 2)
+end
+
+"""
+`entanglements(state)`
+
+Return a list of the von Neumann entanglement entropies for each bisection of the lattice.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+"""
+function entanglements(state::SchwingerState{N,F}) where {N,F}
+    return [entanglement(state, i) for i=1:(N - (lattice(state).periodic ? 0 : 1))]
 end
