@@ -6,6 +6,7 @@ Computes the mass operator ∑ (-1)ⁿ χ†ₙχₙ for the Schwinger model.
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
 @memoize function EDMass(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function massenergy(state::SchwingerBasisState{N,F})
         occs = occupations(state)
         return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j][k]) * occs[j,k] for j=1:N, k=1:F)]
@@ -21,6 +22,7 @@ Computes the gauge kinetic operator ∑(Lₙ+θ/2π)² for the Schwinger model.
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
 @memoize function EDGaugeKinetic(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function electricenergy(state::SchwingerBasisState{N,F})
         efs = electricfields(state)
         return [(occupations(state), L₀(state)) => (bare ? 1 : lattice.a/2) * sum(efs .^ 2)]
@@ -36,6 +38,7 @@ Computes the hopping term -i ∑(χ†ₙ χₙ₊₁ - χ†ₙ₊₁ χₙ) fo
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
 @memoize function EDHopping(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function hopping(state::SchwingerBasisState{N,F})
         parities = [(-1)^sum(state.occupations[:,k]) for k in 1:F]
         hops = Dict{Tuple{BitMatrix,Int},ComplexF64}()
@@ -69,6 +72,39 @@ Computes the hopping term -i ∑(χ†ₙ χₙ₊₁ - χ†ₙ₊₁ χₙ) fo
     return constructoperator(lattice, hopping; L_max = L_max, universe = universe)
 end
 
+@memoize function EDHoppingMass(lattice::SchwingerLattice{N,F}, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    function hoppingmass(state::SchwingerBasisState{N,F})
+        parities = [(-1)^sum(state.occupations[:,k]) for k in 1:F]
+        hops = Dict{Tuple{BitMatrix,Int},ComplexF64}()
+        for (j, dir) in [(site, 1), (mod(site, N) + 1, -1)]
+            for k in 1:F
+                !(1 ≤ j + dir ≤ N) && !(lattice.periodic) && continue
+                j2 = j + dir - (j + dir > N ? N : 0) + (j + dir < 1 ? N : 0)
+                if state.occupations[j,k] && !state.occupations[j2,k]
+                    sign = 1
+
+                    hopoccupations=copy(state.occupations)
+                    hopL₀=L₀(state)
+                    hopoccupations[j,k] = false
+                    hopoccupations[j2,k] = true
+                    if j==1 && dir==-1
+                        hopL₀ += lattice.q
+                        sign *= parities[k]
+                    elseif j==N && dir==1
+                        hopL₀ -= lattice.q
+                        sign *= parities[k]
+                    end
+
+                    hops[(hopoccupations, hopL₀)] = sign*(-1)^(j+1)*1im*(bare ? 1 : lattice.mprime[j][k])
+                end
+            end
+        end
+        return hops
+    end
+    return constructoperator(lattice, hoppingmass; L_max = L_max, universe = universe)
+end
+
 """
 `EDHoppingMass(lattice)`
 Computes the hopping-type mass term i/2 ∑(-1)^n (χ†ₙ₊₁ χₙ + χ†ₙ₋₁ χₙ) for the Schwinger model.
@@ -77,37 +113,8 @@ Computes the hopping-type mass term i/2 ∑(-1)^n (χ†ₙ₊₁ χₙ + χ†�
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
 @memoize function EDHoppingMass(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
-    function hoppingmass(state::SchwingerBasisState{N,F})
-        parities = [(-1)^sum(state.occupations[:,k]) for k in 1:F]
-        hops = Dict{Tuple{BitMatrix,Int},ComplexF64}()
-        for j in 1:N
-            for k in 1:F
-                for dir in [-1,1]
-                    !(1 ≤ j + dir ≤ N) && !(lattice.periodic) && continue
-                    j2 = j + dir - (j + dir > N ? N : 0) + (j + dir < 1 ? N : 0)
-                    if state.occupations[j,k] && !state.occupations[j2,k]
-                        sign = 1
-
-                        hopoccupations=copy(state.occupations)
-                        hopL₀=L₀(state)
-                        hopoccupations[j,k] = false
-                        hopoccupations[j2,k] = true
-                        if j==1 && dir==-1
-                            hopL₀ += lattice.q
-                            sign *= parities[k]
-                        elseif j==N && dir==1
-                            hopL₀ -= lattice.q
-                            sign *= parities[k]
-                        end
-
-                       hops[(hopoccupations, hopL₀)] = sign*(-1)^(j)*1im*(bare ? 1 : lattice.mprime[j][k])
-                    end
-                end
-            end
-        end
-        return hops
-    end
-    return constructoperator(lattice, hoppingmass; L_max = L_max, universe = universe)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    return sum(EDHoppingMass.(Ref(lattice), 1:N; L_max = L_max, universe = universe, bare = bare))
 end
 
 """
@@ -118,6 +125,7 @@ Computes the Hamiltonian for the Schwinger model.
 - `lattice::SchwingerLattice`: Schwinger model lattice.
 """
 @memoize function EDHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
     return  EDGaugeKinetic(lattice; L_max = L_max, universe = universe, bare = false) + 
             EDMass(lattice; L_max = L_max, universe = universe, bare = false) + 
             EDHopping(lattice; L_max = L_max, universe = universe, bare = false) + 
@@ -127,10 +135,6 @@ end
 function opsum_gaugekinetic(lattice::SchwingerLattice{N,F}; universe::Int = 0, bare::Bool = true) where {N,F}
     @unpack q, periodic, a, θ2π = lattice
 
-    universe = mod(universe, q)
-    if universe < 0
-        universe += q
-    end
     θ2πu = θ2π .+ universe
 
     term = OpSum()
@@ -273,33 +277,48 @@ Computes the MPO hopping operator for the Schwinger model.
     return MPOOperator(lattice, mpo, L_max, universe)
 end
 
-function opsum_hoppingmass(lattice::SchwingerLattice{N,F}; bare::Bool = false) where {N,F}
-    @unpack mprime, periodic = lattice
-    term = OpSum()
-
-    for j in 1:N-1
-        for k in 1:F
-            ind = F*(j - 1) + k
-            term += (bare ? 1 : mprime[j][k])*(-1)^(j),"S+",ind,"S-",ind + F
-            term += (bare ? 1 : mprime[j][k])*(-1)^(j),"S-",ind,"S+",ind + F
-        end
+function opsum_hoppingmass(lattice::SchwingerLattice{N,F}, site::Int; bare::Bool = false) where {N,F}
+    if !(1 ≤ site ≤ N)
+        throw(ArgumentError("site must be between 1 and N"))
     end
 
-    if periodic
+    term = OpSum()
+
+    if site < N
+        for k in 1:F
+            ind = F*(site - 1) + k
+            term += (bare ? 1 : lattice.mprime[site][k])*(-1)^(site+1),"S+",ind,"S-",ind + F
+            term += (bare ? 1 : lattice.mprime[site][k])*(-1)^(site+1),"S-",ind,"S+",ind + F
+        end
+    elseif lattice.periodic
         for k in 1:F
             ind = F * (N - 1) + k
 
             if F ≤ 2 # safe to ignore fermion parity factors
-                term += (bare ? 1 : mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1
-                term += (bare ? 1 : mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1
+                term += -(bare ? 1 : lattice.mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1
+                term += -(bare ? 1 : lattice.mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1
             else
-                term += (2^N)*(bare ? 1 : mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
-                term += (2^N)*(bare ? 1 : mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
+                term += -(2^N)*(bare ? 1 : lattice.mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
+                term += -(2^N)*(bare ? 1 : lattice.mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
             end
         end
+    else
+        term += 0,"Id",1
     end
 
     return term
+end
+
+function opsum_hoppingmass(lattice::SchwingerLattice{N,F}; bare::Bool = false) where {N,F}
+    sum(opsum_hoppingmass.(Ref(lattice), 1:N; bare = bare))
+end
+
+@memoize function MPOHoppingMass(lattice::SchwingerLattice{N,F}, site::Int; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+
+    opsum = opsum_hoppingmass(lattice, site; bare = bare)
+    mpo = MPO(opsum, sites(lattice; L_max = L_max))
+    return MPOOperator(lattice, mpo, L_max, universe)
 end
 
 """
@@ -329,7 +348,7 @@ Computes the MPO Hamiltonian for the Schwinger model.
 @memoize function MPOHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0) where {N,F}
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
-    hamiltonian =   opsum_gaugekinetic(lattice; bare = false) + 
+    hamiltonian =   opsum_gaugekinetic(lattice; bare = false, universe = universe) + 
                     opsum_mass(lattice; bare = false) + 
                     opsum_hopping(lattice; bare = false) + 
                     opsum_hoppingmass(lattice; bare = false)

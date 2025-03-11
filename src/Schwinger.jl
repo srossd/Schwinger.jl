@@ -9,7 +9,9 @@ export EDGaugeKinetic, EDMass, EDHopping, EDHoppingMass
 export MPOGaugeKinetic, MPOMass, MPOHopping, MPOHoppingMass
 export EDAverageElectricField, MPOAverageElectricField
 export loweststates, groundstate, energygap
-export energy, occupations, charges, L₀, electricfields, entanglements, scalarvev, pseudoscalarvev
+export energy, occupations, charges, L₀, electricfields, entanglements
+export scalar, scalardensity, scalardensities
+export pseudoscalar, pseudoscalardensity, pseudoscalardensities
 export expectation, act
 export evolve
 

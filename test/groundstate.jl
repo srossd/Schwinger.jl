@@ -37,7 +37,7 @@ end
         lattice = SchwingerLattice{N,1}(periodic=true, L=L)
         ground = groundstate(EDHamiltonian(lattice))
         
-        condensate = scalarvev(ground)
+        condensate = scalar(ground)
 
         # See eq (7) of https://arxiv.org/abs/2206.05308
         exact = -exp(γ)/(2π^(3/2))*exp(2*solve(IntegralProblem(f, (0, Inf), L), QuadGKJL()).u)
@@ -48,12 +48,12 @@ end
     L=8
     lattice = SchwingerLattice{N,1}(periodic=true, L=L)
     ground = groundstate(EDHamiltonian(lattice))
-    condensate = scalarvev(ground)
+    condensate = scalar(ground)
     @showprogress desc = "Chiral Condensate (m = 0): θ dependence" for θ2π=0:.04:1
         lattice = SchwingerLattice{N,1}(periodic=true, L=L, θ2π=θ2π)
         ground = groundstate(EDHamiltonian(lattice))
         
-        condensate_ratio = scalarvev(ground)/condensate
+        condensate_ratio = scalar(ground)/condensate
 
         exact = cos(2π*θ2π)
 
@@ -79,8 +79,8 @@ end
         lattice = SchwingerLattice{10,1}(periodic=true, q = 4)
         gs = groundstate(EDHamiltonian(lattice; universe = p))
 
-        arg = atan(pseudoscalarvev(gs), scalarvev(gs))
+        arg = atan(pseudoscalar(gs), scalar(gs))
 
-        @test mod2pi(arg) ≈ mod2pi(π*(1+p/2)) atol=0.01
+        @test mod2pi(arg + 1) ≈ mod2pi(π*(1+p/2) + 1) atol=0.01
     end
 end

@@ -21,14 +21,14 @@ using ProgressMeter
             act(MPOWilsonLine(lat), mpo_gs)
         end
 
-        ed_gsW_t, ed_obs = evolve(ed_gsW, t; nsteps=20, observable = Dict("energy" => (ψ, t) -> energy(ψ), "scalarvev" => (ψ, t) -> scalarvev(ψ), "electricfields" => (ψ, t) -> electricfields(ψ)))
-        mpo_gsW_t, mpo_obs = evolve(mpo_gsW, t; nsteps=20, observable = Dict("energy" => (ψ, t) -> energy(ψ), "scalarvev" => (ψ, t) -> scalarvev(ψ), "electricfields" => (ψ, t) -> electricfields(ψ)))
+        ed_gsW_t, ed_obs = evolve(ed_gsW, t; nsteps=20, observable = Dict("energy" => (ψ, t) -> energy(ψ), "scalar" => (ψ, t) -> scalar(ψ), "electricfields" => (ψ, t) -> electricfields(ψ)))
+        mpo_gsW_t, mpo_obs = evolve(mpo_gsW, t; nsteps=20, observable = Dict("energy" => (ψ, t) -> energy(ψ), "scalar" => (ψ, t) -> scalar(ψ), "electricfields" => (ψ, t) -> electricfields(ψ)))
 
         @test energy(ed_gsW_t) == ed_obs.energy[20]
         @test energy(mpo_gsW_t) == mpo_obs.energy[20]
 
-        @test scalarvev(ed_gsW_t) == ed_obs.scalarvev[20]
-        @test scalarvev(mpo_gsW_t) == mpo_obs.scalarvev[20]
+        @test scalar(ed_gsW_t) == ed_obs.scalar[20]
+        @test scalar(mpo_gsW_t) == mpo_obs.scalar[20]
 
         # Energy conservation
         @test ed_obs.energy[1] ≈ ed_obs.energy[20] rtol=1E-10
@@ -36,7 +36,7 @@ using ProgressMeter
 
         #ED vs MPO
         @test ed_obs.energy ≈ mpo_obs.energy rtol=1E-4
-        @test ed_obs.scalarvev ≈ mpo_obs.scalarvev rtol=1E-4
+        @test ed_obs.scalar ≈ mpo_obs.scalar rtol=1E-4
         @test ed_obs.electricfields ≈ mpo_obs.electricfields rtol=1E-4
     end
 end

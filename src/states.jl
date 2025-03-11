@@ -359,6 +359,23 @@ function energy(state::SchwingerBasisState{N,F}) where {N,F}
 end
 
 """
+`occupation(state, site)`
+
+Return the expectations of χ†χ operators of each flavor on a given site.
+
+# Arguments
+- `state::SchwingerMPS{N,F}`: Schwinger model state.
+- `site::Int`: the lattice site.
+"""
+function occupation(state::SchwingerMPS{N,F}, site::Int) where {N,F}
+    if !(1 ≤ site ≤ N)
+        throw(ArgumentError("Site must be between 1 and N"))
+    end
+    psi = state.psi
+    return expect(psi, "Sz", sites=((site-1)*F+1):(site*F)) .+ 1/2
+end
+
+"""
 `occupations(state)`
 
 Return an NxF matrix of the expectations of χ†χ operators on each site.
@@ -369,6 +386,22 @@ Return an NxF matrix of the expectations of χ†χ operators on each site.
 function occupations(state::SchwingerMPS{N,F}) where {N,F}
     psi = state.psi
     return transpose(reshape(expect(psi, "Sz", sites=1:N*F) .+ 1/2, (F,N)))
+end
+
+"""
+`occupation(state, site)`
+
+Return the expectations of χ†χ operators of each flavor on a given site.
+
+# Arguments
+- `state::SchwingerBasisState`: Schwinger model basis state.
+- `site::Int`: the lattice site.
+"""
+function occupation(state::SchwingerBasisState{N,F}, site::Int) where {N,F}
+    if !(1 ≤ site ≤ N)
+        throw(ArgumentError("Site must be between 1 and N"))
+    end
+    return state.occupations[site]
 end
 
 """
@@ -384,12 +417,33 @@ function occupations(state::SchwingerBasisState{N,F}) where {N,F}
 end
 
 """
+`occupation(state, site)`
+
+Return the expectations of χ†χ operators of each flavor on a given site.
+
+# Arguments
+- `state::SchwingerEDState`: Schwinger model basis state.
+- `site::Int`: the lattice site.
+"""
+function occupations(state::SchwingerEDState{N,F}, site::Int) where {N,F}
+    if !(1 ≤ site ≤ N)
+        throw(ArgumentError("Site must be between 1 and N"))
+    end
+    states = schwingerbasis(state.hamiltonian.lattice; L_max = state.hamiltonian.L_max)
+    occs = zeros(F)
+    for (coeff, state) in zip(state.coeffs, states)
+        occs .+= real(abs2(coeff)) .* occupations(state)[site]
+    end
+    return occs/real(dot(state, state))
+end
+
+"""
 `occupations(state)`
 
 Return an NxF matrix of the expectations of χ†χ operators on each site.
 
 # Arguments
-- `state::SchwingerBasisState`: Schwinger model basis state.
+- `state::SchwingerEDState`: Schwinger model basis state.
 """
 function occupations(state::SchwingerEDState{N,F}) where {N,F}
     states = schwingerbasis(state.hamiltonian.lattice; L_max = state.hamiltonian.L_max)
@@ -401,36 +455,107 @@ function occupations(state::SchwingerEDState{N,F}) where {N,F}
 end
 
 """
-`scalarvev(state)`
+`scalardensity(state, site)`
 
-Return the VEV of the scalar condensate L⁻¹ ∑ (-1)ⁿ χ†ₙχₙ
+Return the scalar density at site `site`.
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
+- `site::Int`: site.
 """
-function scalarvev(state::SchwingerState{N,F}) where {N,F}
+function scalardensity(state::SchwingerState{N,F}, site::Int) where {N,F}
+    if !(1 ≤ site ≤ N)
+        throw(ArgumentError("site must be between 1 and N"))
+    end
+    before = site == 1 ? N : site - 1
+    after = site == N ? 1 : site + 1
     occs = sum(occupations(state), dims=2)
-    return sum(repeat([-1,1],N÷2) .* occs)/lattice(state).L
+    return 1/(lattice(state).a)*((-1)^(before) * occs[before]/4 + (-1)^site * occs[site]/2 + (-1)^(after) * occs[after]/4)
 end
 
 """
-`pseudoscalarvev(state)`
+`scalardensities(state)`
 
-Return the VEV of the pseudoscalar condensate L⁻¹ ∑ (-1)ⁿ χ†ₙχₙ
+Return the list of scalar densities of `state` on sites 1 through N.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+- `site::Int`: site.
+"""
+function scalardensities(state::SchwingerState{N,F}) where {N,F}
+    return scalardensity.(Ref(state), 1:N)
+end
+
+"""
+`scalar(state)`
+
+Return the expectation value of the scalar condensate, ⟨H_mass⟩/L.
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
 """
-function pseudoscalarvev(state::SchwingerMPS{N,F}) where {N,F}
-    return real(expectation(MPOHoppingMass(lattice(state); bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe), state)/lattice(state).L)
+function scalar(state::SchwingerState{N,F}) where {N,F}
+    return mean(scalardensities(state))
 end
 
-function pseudoscalarvev(state::SchwingerEDState{N,F}) where {N,F}
-    return real(expectation(EDHoppingMass(lattice(state); bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe), state)/lattice(state).L)
+"""
+`pseudoscalardensity(state, n)`
+
+Return the pseudoscalar density at site `n`.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+- `n::Int`: site.
+"""
+function pseudoscalardensity(state::SchwingerMPS{N,F}, site::Int) where {N,F}
+    if !(1 ≤ site ≤ N)
+        throw(ArgumentError("site must be between 1 and N"))
+    end
+    before = site == 1 ? N : site - 1
+    function p(n)
+        return real(expectation(MPOHoppingMass(lattice(state), n; bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe), state))
+    end
+    return 1/(lattice(state).a)*(p(site)/2 + p(before)/2)
 end
 
-function pseudoscalarvev(state::SchwingerBasisState{N,F}) where {N,F}
+function pseudoscalardensity(state::SchwingerEDState{N,F}, site::Int) where {N,F}
+    if !(1 ≤ site ≤ N)
+        throw(ArgumentError("site must be between 1 and N"))
+    end
+    before = site == 1 ? N : site - 1
+    function p(n)
+        return real(expectation(EDHoppingMass(lattice(state), n; bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe), state))
+    end
+    return 1/(lattice(state).a)*(p(site)/2 + p(before)/2)
+end
+
+function pseudoscalardensity(::SchwingerBasisState{N,F}, ::Int) where {N,F}
     return 0
+end
+
+"""
+`pseudoscalardensities(state)`
+
+Return the list of pseudoscalar densities of `state` on sites 1 through N.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+- `site::Int`: site.
+"""
+function pseudoscalardensities(state::SchwingerState{N,F}) where {N,F}
+    return pseudoscalardensity.(Ref(state), 1:N)
+end
+
+"""
+`pseudoscalar(state)`
+
+Return the expectation value of the pseudoscalar condensate, ⟨H_hoppingmass⟩/L.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+"""
+function pseudoscalar(state::SchwingerState{N,F}) where {N,F}
+    return mean(pseudoscalardensities(state))
 end
 
 """
@@ -458,7 +583,7 @@ function L₀(state::SchwingerBasisState{N,F}) where {N,F}
 end
 
 function L₀(state::SchwingerMPS{N,F}) where {N,F}
-    return lattice(state).periodic ? lattice(state).q * expect(state.psi, "L0", sites=N*F + 1) : 0
+    return (lattice(state).periodic ? lattice(state).q * expect(state.psi, "L0", sites=N*F + 1) : 0) + state.hamiltonian.universe
 end
 
 function L₀(state::SchwingerEDState{N,F}) where {N,F}
