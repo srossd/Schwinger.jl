@@ -9,7 +9,7 @@ export EDGaugeKinetic, EDMass, EDHopping, EDHoppingMass
 export MPOGaugeKinetic, MPOMass, MPOHopping, MPOHoppingMass
 export EDAverageElectricField, MPOAverageElectricField
 export loweststates, groundstate, energygap
-export energy, occupations, charges, L₀, electricfields, entanglements
+export energy, occupation, occupations, charge, charges, L₀, electricfield, electricfields, entanglement, entanglements
 export scalar, scalardensity, scalardensities
 export pseudoscalar, pseudoscalardensity, pseudoscalardensities
 export expectation, act
@@ -26,6 +26,7 @@ using Statistics
 using LinearAlgebra
 using SparseArrays
 using DataFrames
+using HDF5
 
 using Memoize
 using Parameters
@@ -38,6 +39,7 @@ include("./wilson.jl")
 include("./average_electric_field.jl")
 include("./timeevolution.jl")
 include("./utility.jl")
+include("./hdf5.jl")
 
 """
 A Julia package for the Hamiltonian lattice Schwinger model.

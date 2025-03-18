@@ -425,7 +425,7 @@ Return the expectations of χ†χ operators of each flavor on a given site.
 - `state::SchwingerEDState`: Schwinger model basis state.
 - `site::Int`: the lattice site.
 """
-function occupations(state::SchwingerEDState{N,F}, site::Int) where {N,F}
+function occupation(state::SchwingerEDState{N,F}, site::Int) where {N,F}
     if !(1 ≤ site ≤ N)
         throw(ArgumentError("Site must be between 1 and N"))
     end
@@ -571,6 +571,19 @@ function charges(state::SchwingerState{N,F}) where {N,F}
 end
 
 """
+`charge(state, site)`
+
+Return the expectation value of the charge operator on site `site`.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+- `site::Int`: site.
+"""
+function charge(state::SchwingerState{N,F}, site::Int) where {N,F}
+    return charges(state)[site]
+end
+
+"""
 `L₀(state)`
 
 Return the expectation value of L₀.
@@ -592,12 +605,25 @@ function L₀(state::SchwingerEDState{N,F}) where {N,F}
 end
 
 """
+`electricfield(state, link)`
+
+Return the expectation of (L + θ/2π) on the link `link`.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+- `link::Int`: link.
+"""
+function electricfield(state::SchwingerState{N,F}, link::Int) where {N,F}
+    return sum(charges(state)[1:link]) .+ L₀(state) .+ lattice(state).θ2π
+end
+
+"""
 `electricfields(state)`
 
 Return a list of the expectations of (L + θ/2π) operators on each link.
 
 # Arguments
-- `state::SchwingerMPS`: Schwinger model state.
+- `state::SchwingerState`: Schwinger model state.
 """
 function electricfields(state::SchwingerState{N,F}) where {N,F}
     lat = lattice(state)

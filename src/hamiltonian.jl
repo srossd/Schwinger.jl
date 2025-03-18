@@ -9,7 +9,7 @@ Computes the mass operator ∑ (-1)ⁿ χ†ₙχₙ for the Schwinger model.
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function massenergy(state::SchwingerBasisState{N,F})
         occs = occupations(state)
-        return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j][k]) * occs[j,k] for j=1:N, k=1:F)]
+        return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j,k]) * occs[j,k] for j=1:N, k=1:F)]
     end
     return constructoperator(lattice, massenergy; L_max = L_max, universe = universe)
 end
@@ -96,7 +96,7 @@ end
                         sign *= parities[k]
                     end
 
-                    hops[(hopoccupations, hopL₀)] = sign*(-1)^(j+1)*1im*(bare ? 1 : lattice.mprime[j][k])
+                    hops[(hopoccupations, hopL₀)] = sign*(-1)^(j+1)*1im*(bare ? 1 : lattice.mprime[j,k])
                 end
             end
         end
@@ -209,7 +209,7 @@ function opsum_mass(lattice::SchwingerLattice{N,F}; bare::Bool = true) where {N,
     for j in 1:N
         for k in 1:F
             ind = F*(j - 1) + k
-            term += (bare ? 1 : mlat[j][k]) * ((-1) ^ j),"Sz",ind
+            term += (bare ? 1 : mlat[j,k]) * ((-1) ^ j),"Sz",ind
         end
     end
 
@@ -287,19 +287,19 @@ function opsum_hoppingmass(lattice::SchwingerLattice{N,F}, site::Int; bare::Bool
     if site < N
         for k in 1:F
             ind = F*(site - 1) + k
-            term += (bare ? 1 : lattice.mprime[site][k])*(-1)^(site+1),"S+",ind,"S-",ind + F
-            term += (bare ? 1 : lattice.mprime[site][k])*(-1)^(site+1),"S-",ind,"S+",ind + F
+            term += (bare ? 1 : lattice.mprime[site,k])*(-1)^(site+1),"S+",ind,"S-",ind + F
+            term += (bare ? 1 : lattice.mprime[site,k])*(-1)^(site+1),"S-",ind,"S+",ind + F
         end
     elseif lattice.periodic
         for k in 1:F
             ind = F * (N - 1) + k
 
             if F ≤ 2 # safe to ignore fermion parity factors
-                term += -(bare ? 1 : lattice.mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1
-                term += -(bare ? 1 : lattice.mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1
+                term += -(bare ? 1 : lattice.mprime[N,k]),"S+",ind,"S-",k,"raise",N * F + 1
+                term += -(bare ? 1 : lattice.mprime[N,k]),"S-",ind,"S+",k,"lower",N * F + 1
             else
-                term += -(2^N)*(bare ? 1 : lattice.mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
-                term += -(2^N)*(bare ? 1 : lattice.mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
+                term += -(2^N)*(bare ? 1 : lattice.mprime[N,k]),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
+                term += -(2^N)*(bare ? 1 : lattice.mprime[N,k]),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
             end
         end
     else
