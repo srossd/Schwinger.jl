@@ -1,15 +1,20 @@
+# =============================================================================
+# ED Backend
+# =============================================================================
+
 """
 `EDMass(lattice)`
 Computes the mass operator ∑ (-1)ⁿ χ†ₙχₙ for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDMass(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function EDMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+    N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
-    function massenergy(state::SchwingerBasisState{N,F})
+    function massenergy(state::BasisState)
         occs = occupations(state)
-        return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j,k]) * occs[j,k] for j=1:N, k=1:F)]
+        return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j][k]) * occs[j,k] for j=1:N, k=1:F)]
     end
     return constructoperator(lattice, massenergy; L_max = L_max, universe = universe)
 end
@@ -19,11 +24,11 @@ end
 Computes the gauge kinetic operator ∑(Lₙ+θ/2π)² for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDGaugeKinetic(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function EDGaugeKinetic(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
-    function electricenergy(state::SchwingerBasisState{N,F})
+    function electricenergy(state::BasisState)
         efs = electricfields(state)
         return [(occupations(state), L₀(state)) => (bare ? 1 : lattice.a/2) * sum(efs .^ 2)]
     end
@@ -35,11 +40,12 @@ end
 Computes the hopping term -i ∑(χ†ₙ χₙ₊₁ - χ†ₙ₊₁ χₙ) for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDHopping(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function EDHopping(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+    N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
-    function hopping(state::SchwingerBasisState{N,F})
+    function hopping(state::BasisState)
         parities = [(-1)^sum(state.occupations[:,k]) for k in 1:F]
         hops = Dict{Tuple{BitMatrix,Int},ComplexF64}()
         for j in 1:N
@@ -72,9 +78,10 @@ Computes the hopping term -i ∑(χ†ₙ χₙ₊₁ - χ†ₙ₊₁ χₙ) fo
     return constructoperator(lattice, hopping; L_max = L_max, universe = universe)
 end
 
-@memoize function EDHoppingMass(lattice::SchwingerLattice{N,F}, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function EDHoppingMass(lattice::Lattice, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+    N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
-    function hoppingmass(state::SchwingerBasisState{N,F})
+    function hoppingmass(state::BasisState)
         parities = [(-1)^sum(state.occupations[:,k]) for k in 1:F]
         hops = Dict{Tuple{BitMatrix,Int},ComplexF64}()
         for (j, dir) in [(site, 1), (mod(site, N) + 1, -1)]
@@ -96,7 +103,7 @@ end
                         sign *= parities[k]
                     end
 
-                    hops[(hopoccupations, hopL₀)] = sign*(-1)^(j+1)*1im*(bare ? 1 : lattice.mprime[j,k])
+                    hops[(hopoccupations, hopL₀)] = sign*(-1)^(j+1)*1im*(bare ? 1 : lattice.mprime[j][k])
                 end
             end
         end
@@ -110,11 +117,11 @@ end
 Computes the hopping-type mass term i/2 ∑(-1)^n (χ†ₙ₊₁ χₙ + χ†ₙ₋₁ χₙ) for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDHoppingMass(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function EDHoppingMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
-    return sum(EDHoppingMass.(Ref(lattice), 1:N; L_max = L_max, universe = universe, bare = bare))
+    return sum(EDHoppingMass.(Ref(lattice), 1:Int(lattice.N); L_max = L_max, universe = universe, bare = bare))
 end
 
 """
@@ -122,9 +129,9 @@ end
 Computes the Hamiltonian for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) where {N,F}
+@memoize function EDHamiltonian(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0)
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     return  EDGaugeKinetic(lattice; L_max = L_max, universe = universe, bare = false) + 
             EDMass(lattice; L_max = L_max, universe = universe, bare = false) + 
@@ -132,8 +139,13 @@ Computes the Hamiltonian for the Schwinger model.
             EDHoppingMass(lattice; L_max = L_max, universe = universe, bare = false)
 end
 
-function opsum_gaugekinetic(lattice::SchwingerLattice{N,F}; universe::Int = 0, bare::Bool = true) where {N,F}
-    @unpack q, periodic, a, θ2π = lattice
+# =============================================================================
+# ITensors Backend
+# =============================================================================
+
+function opsum_gaugekinetic(lattice::Lattice; universe::Int = 0, bare::Bool = true)
+    N, F = Int(lattice.N), lattice.F
+    q, periodic, a, θ2π = lattice.q, lattice.periodic, lattice.a, lattice.θ2π
 
     θ2πu = θ2π .+ universe
 
@@ -153,9 +165,9 @@ function opsum_gaugekinetic(lattice::SchwingerLattice{N,F}; universe::Int = 0, b
         end
     end
 
-    term += sum(θ2πu .^ 2),"Id",1
-    term += -q * F / 2 * sum(θ2πu),"Id",1
-    term += q^2 * N * F * F / 8,"Id",1
+    term += sum(θ2πu[1:N] .^ 2),"Id",1
+    term += -q * F * sum(θ2πu[1:N]) / 2,"Id",1
+    term += q^2 * N * F^2 / 8,"Id",1
 
     for j in 1:N-1
         for k in 1:F
@@ -192,24 +204,25 @@ end
 Computes the MPO gauge kinetic operator for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function MPOGaugeKinetic(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function ITensorGaugeKinetic(lattice::Lattice; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true, sites::Union{Vector{Index{T}},Nothing} = nothing) where {T}
+    N, F = lattice.N, lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_gaugekinetic(lattice; universe = universe, bare = bare)
-    mpo = MPO(opsum, sites(lattice; L_max = L_max))
-    return MPOOperator(lattice, mpo, L_max, universe)
+    mpo = ITensorMPS.MPO(opsum, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
 end
 
-function opsum_mass(lattice::SchwingerLattice{N,F}; bare::Bool = true) where {N,F}
-    @unpack mlat = lattice
+function opsum_mass(lattice::Lattice; bare::Bool = true)
+    N, F, mlat = Int(lattice.N), lattice.F, lattice.mlat
     term = OpSum()
 
     for j in 1:N
         for k in 1:F
             ind = F*(j - 1) + k
-            term += (bare ? 1 : mlat[j,k]) * ((-1) ^ j),"Sz",ind
+            term += (bare ? 1 : mlat[j][k]) * ((-1) ^ j),"Sz",ind
         end
     end
 
@@ -222,18 +235,19 @@ end
 Computes the MPO mass operator for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function MPOMass(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function ITensorMass(lattice::Lattice; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true, sites::Union{Vector{Index{T}},Nothing} = nothing) where {T}
+    N, F = lattice.N, lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_mass(lattice; bare = bare)
-    mpo = MPO(opsum, sites(lattice; L_max = L_max))
-    return MPOOperator(lattice, mpo, L_max, universe)
+    mpo = MPO(opsum, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
 end
 
-function opsum_hopping(lattice::SchwingerLattice{N,F}; bare::Bool = true) where {N,F}
-    @unpack a, periodic = lattice
+function opsum_hopping(lattice::Lattice; bare::Bool = true)
+    N, F, a, periodic = Int(lattice.N), lattice.F, lattice.a, lattice.periodic
     term = OpSum()
 
     for j in 1:N-1
@@ -267,17 +281,19 @@ end
 Computes the MPO hopping operator for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function MPOHopping(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function ITensorHopping(lattice::Lattice; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true, sites::Union{Vector{Index{T}},Nothing} = nothing) where {T}
+    N, F = lattice.N, lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_hopping(lattice; bare = bare)
-    mpo = MPO(opsum, sites(lattice; L_max = L_max))
-    return MPOOperator(lattice, mpo, L_max, universe)
+    mpo = ITensorMPS.MPO(opsum, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
 end
 
-function opsum_hoppingmass(lattice::SchwingerLattice{N,F}, site::Int; bare::Bool = false) where {N,F}
+function opsum_hoppingmass(lattice::Lattice, site::Int; bare::Bool = false)
+    N, F = Int(lattice.N), lattice.F
     if !(1 ≤ site ≤ N)
         throw(ArgumentError("site must be between 1 and N"))
     end
@@ -287,19 +303,19 @@ function opsum_hoppingmass(lattice::SchwingerLattice{N,F}, site::Int; bare::Bool
     if site < N
         for k in 1:F
             ind = F*(site - 1) + k
-            term += (bare ? 1 : lattice.mprime[site,k])*(-1)^(site+1),"S+",ind,"S-",ind + F
-            term += (bare ? 1 : lattice.mprime[site,k])*(-1)^(site+1),"S-",ind,"S+",ind + F
+            term += (bare ? 1 : lattice.mprime[site][k])*(-1)^(site+1),"S+",ind,"S-",ind + F
+            term += (bare ? 1 : lattice.mprime[site][k])*(-1)^(site+1),"S-",ind,"S+",ind + F
         end
     elseif lattice.periodic
         for k in 1:F
             ind = F * (N - 1) + k
 
             if F ≤ 2 # safe to ignore fermion parity factors
-                term += -(bare ? 1 : lattice.mprime[N,k]),"S+",ind,"S-",k,"raise",N * F + 1
-                term += -(bare ? 1 : lattice.mprime[N,k]),"S-",ind,"S+",k,"lower",N * F + 1
+                term += -(bare ? 1 : lattice.mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1
+                term += -(bare ? 1 : lattice.mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1
             else
-                term += -(2^N)*(bare ? 1 : lattice.mprime[N,k]),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
-                term += -(2^N)*(bare ? 1 : lattice.mprime[N,k]),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
+                term += -(2^N)*(bare ? 1 : lattice.mprime[N][k]),"S+",ind,"S-",k,"raise",N * F + 1, wigner_string(N, F, k)...
+                term += -(2^N)*(bare ? 1 : lattice.mprime[N][k]),"S-",ind,"S+",k,"lower",N * F + 1, wigner_string(N, F, k)...
             end
         end
     else
@@ -309,16 +325,18 @@ function opsum_hoppingmass(lattice::SchwingerLattice{N,F}, site::Int; bare::Bool
     return term
 end
 
-function opsum_hoppingmass(lattice::SchwingerLattice{N,F}; bare::Bool = false) where {N,F}
+function opsum_hoppingmass(lattice::Lattice; bare::Bool = false)
+    N, F = Int(lattice.N), lattice.F
     sum(opsum_hoppingmass.(Ref(lattice), 1:N; bare = bare))
 end
 
-@memoize function MPOHoppingMass(lattice::SchwingerLattice{N,F}, site::Int; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function ITensorHoppingMass(lattice::Lattice, site::Int; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true, sites::Union{Vector{Index{T}},Nothing} = nothing) where {T}
+    N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_hoppingmass(lattice, site; bare = bare)
-    mpo = MPO(opsum, sites(lattice; L_max = L_max))
-    return MPOOperator(lattice, mpo, L_max, universe)
+    mpo = ITensorMPS.MPO(opsum, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
 end
 
 """
@@ -327,14 +345,14 @@ end
 Computes the MPO hopping-mass operator for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function MPOHoppingMass(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true) where {N,F}
+@memoize function ITensorHoppingMass(lattice::Lattice; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true, sites::Union{Vector{Index{T}},Nothing} = nothing) where {T}
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     opsum = opsum_hoppingmass(lattice; bare = bare)
-    mpo = MPO(opsum, sites(lattice; L_max = L_max))
-    return MPOOperator(lattice, mpo, L_max, universe)
+    mpo = ITensorMPS.MPO(opsum, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
 end
 
 """
@@ -343,16 +361,374 @@ end
 Computes the MPO Hamiltonian for the Schwinger model.
 
 # Arguments
-- `lattice::SchwingerLattice`: Schwinger model lattice.
+- `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function MPOHamiltonian(lattice::SchwingerLattice{N,F}; L_max::Union{Int,Nothing} = nothing, universe::Int = 0) where {N,F}
+@memoize function ITensorHamiltonian(lattice::Lattice; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, sites::Union{Vector{Index{T}},Nothing} = nothing) where {T}
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
-    hamiltonian =   opsum_gaugekinetic(lattice; bare = false, universe = universe) + 
-                    opsum_mass(lattice; bare = false) + 
-                    opsum_hopping(lattice; bare = false) + 
+    hamiltonian =   opsum_gaugekinetic(lattice; bare = false, universe = universe) +
+                    opsum_mass(lattice; bare = false) +
+                    opsum_hopping(lattice; bare = false) +
                     opsum_hoppingmass(lattice; bare = false)
 
-    mpo = MPO(hamiltonian, sites(lattice; L_max = L_max))
-    return MPOOperator(lattice, mpo, L_max, universe)
+    mpo = ITensorMPS.MPO(hamiltonian, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
+end
+
+# =============================================================================
+# MPSKit Backend
+# =============================================================================
+
+"""
+`MPSKitGaugeKinetic(lattice)`
+
+Computes the MPSKit gauge kinetic operator for the Schwinger model.
+
+# Arguments
+- `lattice::Lattice`: Schwinger model lattice.
+"""
+@memoize function MPSKitGaugeKinetic(lattice::Lattice; universe::Int = 0)
+    if lattice.periodic
+        throw(ArgumentError("MPSKit backend not implemented for periodic lattices"))
+    end
+    N, F = lattice.N, lattice.F
+    _, universe = process_L_max_universe(lattice, nothing, universe)
+    θ2πu = copy(lattice.θ2π) .+ universe
+
+    link_fcts = [r::U1Irrep -> (lattice.a/2) * (r.charge + θ2πu[n])^2 for n in 1:(isinf(N) ? 2 : Int(N))]
+    if isinf(N)
+        mpo = InfiniteLEMPOHamiltonian(get_mpskit_spaces(lattice), vcat(fill(missing, F - 1), [link_fcts[1]], fill(missing, F - 1), [link_fcts[2]]))
+    else
+        all_link_fcts = vcat([vcat(fill(missing, F - 1), [link_fcts[n]]) for n in 1:Int(N)]...)
+        mpo = FiniteLEMPOHamiltonian(get_mpskit_spaces(lattice), all_link_fcts)
+    end
+    return MPSKitOperator(lattice, mpo, universe)
+end
+
+function matrices_mass(lattice::Lattice)
+    if lattice.periodic
+        throw(ArgumentError("MPSKit backend not implemented for periodic lattices"))
+    end
+    
+    N, F = lattice.N, lattice.F
+
+    spaces = get_mpskit_spaces(lattice)
+    oddspace = spaces[1]
+    evenspace = spaces[F + 1]
+
+    masseven = ones(U1Space(0 => 1) ⊗ evenspace ← evenspace ⊗ U1Space(0 => 1))
+    block(masseven, U1Irrep(0)) .= -0.5
+    block(masseven, U1Irrep(lattice.q)) .= 0.5
+    massodd  = ones(U1Space(0 => 1) ⊗ oddspace  ← oddspace  ⊗ U1Space(0 => 1))
+    block(massodd, U1Irrep(0)) .= -0.5
+    block(massodd, U1Irrep(-lattice.q)) .= 0.5
+
+    Elt = Union{Missing, typeof(masseven), scalartype(masseven)}
+    A = Vector{Matrix{Elt}}(undef, (isinf(N) ? 2 : Int(N))*F)
+
+    for n in 1:(isinf(N) ? 2 : Int(N))*F
+        W = Matrix{Elt}(missing, 2, 2)
+        W[1, 1] = 1.0
+        W[end, end] = 1.0
+
+        site_ind = 1 + ((n - 1) ÷ F)
+        flavor_ind = mod(n - 1, F) + 1
+
+        if site_ind % 2 == 1
+            W[1, 2] = lattice.mlat[site_ind][flavor_ind] * massodd
+        else
+            W[1, 2] = lattice.mlat[site_ind][flavor_ind] * masseven
+        end
+
+        A[n] = W
+    end
+
+    return A
+end
+
+"""
+`MPSKitMass(lattice)`
+
+Computes the MPSKit mass operator for the Schwinger model.
+
+# Arguments
+- `lattice::Lattice`: Schwinger model lattice.
+"""
+@memoize function MPSKitMass(lattice::Lattice; universe::Int = 0, bare::Bool = true)
+    A = matrices_mass(lattice)
+
+    if isinf(lattice.N)
+        mpo = InfiniteMPOHamiltonian(A)
+    else
+        A[1] = A[1][1:1, :]
+        A[end] = A[end][:, end:end]
+        mpo = FiniteMPOHamiltonian(A)
+    end
+
+    if !bare
+        mpo *= lattice.mlat
+    end
+
+    return MPSKitOperator(lattice, mpo, universe)
+end
+
+function matrices_hopping(lattice::Lattice)
+    if lattice.periodic
+        throw(ArgumentError("MPSKit backend not implemented for periodic lattices"))
+    end
+    
+    N, F = lattice.N, lattice.F
+
+    spaces = get_mpskit_spaces(lattice)
+    oddspace = spaces[1]
+    evenspace = spaces[F + 1]
+
+    q = lattice.q
+    hopleftevenL =  ones(U1Space(0 => 1)  ⊗ evenspace ← evenspace ⊗ U1Space(q => 1))
+    hopleftevenR =  ones(U1Space(q => 1)  ⊗ evenspace ← evenspace ⊗ U1Space(0 => 1))
+    hopleftoddL =   ones(U1Space(0 => 1)  ⊗ oddspace  ← oddspace  ⊗ U1Space(q => 1))
+    hopleftoddR =   ones(U1Space(q => 1)  ⊗ oddspace  ← oddspace  ⊗ U1Space(0 => 1))
+    hoprightevenL = ones(U1Space(0 => 1)  ⊗ evenspace ← evenspace ⊗ U1Space(-q => 1))
+    hoprightevenR = ones(U1Space(-q => 1) ⊗ evenspace ← evenspace ⊗ U1Space(0 => 1))
+    hoprightoddL =  ones(U1Space(0 => 1)  ⊗ oddspace  ← oddspace  ⊗ U1Space(-q => 1))
+    hoprightoddR =  ones(U1Space(-q => 1) ⊗ oddspace  ← oddspace  ⊗ U1Space(0 => 1))
+
+    Elt = Union{Missing, typeof(hopleftevenL), scalartype(hopleftevenL)}
+    A = Vector{Matrix{Elt}}(undef, (isinf(N) ? 2 : Int(N))*F)
+
+    for n in 1:(isinf(N) ? 2 : Int(N))*F
+        W = Matrix{Elt}(missing, 2 + 2*F, 2 + 2*F)
+        W[1, 1] = 1.0
+        W[end, end] = 1.0
+
+        site_ind = 1 + ((n - 1) ÷ F)
+        flavor_ind = mod(n - 1, F) + 1
+
+        if isodd(site_ind)
+            W[1, 1 + 2*(flavor_ind - 1) + 1] = 1/(2*lattice.a) * hopleftoddL
+            W[1, 1 + 2*(flavor_ind - 1) + 2] = 1/(2*lattice.a) * hoprightoddL
+            W[1 + 2*(flavor_ind - 1) + 1, end] = hopleftoddR
+            W[1 + 2*(flavor_ind - 1) + 2, end] = hoprightoddR
+
+            for j=1:F
+                j == flavor_ind && continue
+                W[1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = 1.0
+                W[1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = 1.0
+            end
+        else
+            W[1, 1 + 2*(flavor_ind - 1) + 1] = 1/(2*lattice.a) * hopleftevenL
+            W[1, 1 + 2*(flavor_ind - 1) + 2] = 1/(2*lattice.a) * hoprightevenL
+            W[1 + 2*(flavor_ind - 1) + 1, end] = hopleftevenR
+            W[1 + 2*(flavor_ind - 1) + 2, end] = hoprightevenR
+
+            for j=1:F
+                j == flavor_ind && continue
+                W[1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = 1.0
+                W[1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = 1.0
+            end
+        end
+
+        A[n] = W
+    end
+
+    return A
+end
+
+"""
+`MPSKitHopping(lattice)`
+
+Computes the MPSKit hopping operator for the Schwinger model.
+
+# Arguments
+- `lattice::Lattice`: Schwinger model lattice.
+"""
+@memoize function MPSKitHopping(lattice::Lattice; universe::Int = 0)
+    A = matrices_hopping(lattice)
+
+    if isinf(lattice.N)
+        mpo = InfiniteMPOHamiltonian(A)
+    else
+        A[1] = A[1][1:1, :]
+        A[end] = A[end][:, end:end]
+        mpo = FiniteMPOHamiltonian(A)
+    end
+
+    return MPSKitOperator(lattice, mpo, universe)
+end
+
+function matrices_hoppingmass(lattice::Lattice; bare::Bool = false)
+    if lattice.periodic
+        throw(ArgumentError("MPSKit backend not implemented for periodic lattices"))
+    end
+    
+    N, F = lattice.N, lattice.F
+
+    spaces = get_mpskit_spaces(lattice)
+    oddspace = spaces[1]
+    evenspace = spaces[F + 1]
+
+    q = lattice.q
+    hopleftevenL =  ones(U1Space(0 => 1)  ⊗ evenspace ← evenspace ⊗ U1Space(q => 1))
+    hopleftevenR =  ones(U1Space(q => 1)  ⊗ evenspace ← evenspace ⊗ U1Space(0 => 1))
+    hopleftoddL =   ones(U1Space(0 => 1)  ⊗ oddspace  ← oddspace  ⊗ U1Space(q => 1))
+    hopleftoddR =   ones(U1Space(q => 1)  ⊗ oddspace  ← oddspace  ⊗ U1Space(0 => 1))
+    hoprightevenL = ones(U1Space(0 => 1)  ⊗ evenspace ← evenspace ⊗ U1Space(-q => 1))
+    hoprightevenR = ones(U1Space(-q => 1) ⊗ evenspace ← evenspace ⊗ U1Space(0 => 1))
+    hoprightoddL =  ones(U1Space(0 => 1)  ⊗ oddspace  ← oddspace  ⊗ U1Space(-q => 1))
+    hoprightoddR =  ones(U1Space(-q => 1) ⊗ oddspace  ← oddspace  ⊗ U1Space(0 => 1))
+
+    Elt = Union{Missing, typeof(hopleftevenL), scalartype(hopleftevenL)}
+    A = Vector{Matrix{Elt}}(undef, (isinf(N) ? 2 : Int(N))*F)
+
+    for n in 1:(isinf(N) ? 2 : Int(N))*F
+        W = Matrix{Elt}(missing, 2 + 2*F, 2 + 2*F)
+        W[1, 1] = 1.0
+        W[end, end] = 1.0
+
+        site_ind = 1 + ((n - 1) ÷ F)
+        flavor_ind = mod(n - 1, F) + 1
+
+        if isodd(site_ind)
+            W[1, 1 + 2*(flavor_ind - 1) + 1] = (bare ? 1 : lattice.mprime[site_ind][flavor_ind]) * hopleftoddL
+            W[1, 1 + 2*(flavor_ind - 1) + 2] = (bare ? 1 : lattice.mprime[site_ind][flavor_ind]) * hoprightoddL
+            W[1 + 2*(flavor_ind - 1) + 1, end] = hopleftoddR
+            W[1 + 2*(flavor_ind - 1) + 2, end] = hoprightoddR
+
+            for j=1:F
+                j == flavor_ind && continue
+                W[1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = 1.0
+                W[1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = 1.0
+            end
+        else
+            W[1, 1 + 2*(flavor_ind - 1) + 1] = -(bare ? 1 : lattice.mprime[site_ind][flavor_ind]) * hopleftevenL
+            W[1, 1 + 2*(flavor_ind - 1) + 2] = -(bare ? 1 : lattice.mprime[site_ind][flavor_ind]) * hoprightevenL
+            W[1 + 2*(flavor_ind - 1) + 1, end] = hopleftevenR
+            W[1 + 2*(flavor_ind - 1) + 2, end] = hoprightevenR
+
+            for j=1:F
+                j == flavor_ind && continue
+                W[1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = 1.0
+                W[1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = 1.0
+            end
+        end
+
+        A[n] = W
+    end
+
+    return A
+end
+
+@memoize function MPSKitHoppingMass(lattice::Lattice, site::Int; bare::Bool = true, universe::Int = 0)
+    A = matrices_hoppingmass(lattice; bare = bare) # TODO: optimize to only build needed tensors
+
+    for n in eachindex(A)
+        site_ind = 1 + ((n - 1) ÷ lattice.F)
+        if site_ind != site && site_ind != site + 1
+            for m in 2:size(A[n])[1]-1
+                A[n][1, m] *= 0.0
+                A[n][m, end] *= 0.0
+            end
+        end
+    end
+
+    if isinf(lattice.N)
+        mpo = InfiniteMPOHamiltonian(A)
+    else
+        A[1] = A[1][1:1, :]
+        for j=2:lattice.F
+            for k=2:(2*lattice.F + 1)
+                A[j][k, end] = missing
+            end
+        end
+        for j=(Int(lattice.N) - 1)*lattice.F + 1:Int(lattice.N)*lattice.F - 1
+            for k=2:(2*lattice.F + 1)
+                A[j][1, k] = missing
+            end
+        end
+        A[end] = A[end][:, end:end]
+        mpo = FiniteMPOHamiltonian(A)
+    end
+
+    return MPSKitOperator(lattice, mpo, universe)
+end
+
+"""
+`MPSKitHoppingMass(lattice)`
+
+Computes the MPSKit hopping-mass operator for the Schwinger model.
+
+# Arguments
+- `lattice::Lattice`: Schwinger model lattice.
+"""
+@memoize function MPSKitHoppingMass(lattice::Lattice; universe::Int = 0)
+    A = matrices_hoppingmass(lattice)
+
+    if isinf(lattice.N)
+        mpo = InfiniteMPOHamiltonian(A)
+    else
+        A[1] = A[1][1:1, :]
+        for j=2:lattice.F
+            for k=2:(2*lattice.F + 1)
+                A[j][k, end] = missing
+            end
+        end
+        for j=(Int(lattice.N) - 1)*lattice.F + 1:Int(lattice.N)*lattice.F - 1
+            for k=2:(2*lattice.F + 1)
+                A[j][1, k] = missing
+            end
+        end
+        A[end] = A[end][:, end:end]
+        mpo = FiniteMPOHamiltonian(A)
+    end
+
+    return MPSKitOperator(lattice, mpo, universe)
+end
+
+"""
+`MPSKitHamiltonian(lattice)`
+
+Computes the MPSKit Hamiltonian for the Schwinger model.
+
+# Arguments
+- `lattice::Lattice`: Schwinger model lattice.
+"""
+@memoize function MPSKitHamiltonian(lattice::Lattice; universe::Int = 0)
+    Amass = matrices_mass(lattice)
+    Ahoppingmass = matrices_hoppingmass(lattice)
+    A = matrices_hopping(lattice)
+    gauge = MPSKitGaugeKinetic(lattice; universe = universe)
+
+    for n in eachindex(A)
+        A[n][1, end] = Amass[n][1, end]
+        for k in 1:lattice.F
+            A[n][1, 1 + 2*(k - 1) + 1] += Ahoppingmass[n][1, 1 + 2*(k - 1) + 1]
+            A[n][1, 1 + 2*(k - 1) + 2] += Ahoppingmass[n][1, 1 + 2*(k - 1) + 2]
+        end
+    end
+
+    if isinf(lattice.N)
+        mpo = InfiniteMPOHamiltonian(A)
+    else
+        A[1] = A[1][1:1, :]
+        for j=2:lattice.F
+            for k=2:(2*lattice.F + 1)
+                A[j][k, end] = missing
+            end
+        end
+        for j=length(A) - lattice.F + 1:length(A) - 1
+            for k=2:(2*lattice.F + 1)
+                A[j][1, k] = missing
+            end
+        end
+        A[end] = A[end][:, end:end]
+        mpo = FiniteMPOHamiltonian(A)
+    end
+
+    lempo = if isinf(lattice.N)
+        InfiniteLEMPOHamiltonian(mpo, gauge.lempo.link_fcts)
+    else
+        FiniteLEMPOHamiltonian(mpo, gauge.lempo.link_fcts)
+    end
+
+    return MPSKitOperator(lattice, lempo, universe)
 end

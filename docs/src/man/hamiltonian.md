@@ -12,7 +12,33 @@ This is supplemented by the Gauss law
 L_n = L_{n-1} + Q_n, \qquad Q_n \equiv q\left(\sum_{\alpha=1}^F \chi^\dagger_{n,\alpha} \chi_{n,\alpha} - \begin{cases} F & n\text{ odd} \\ 0 & n\text{ even} \end{cases}\right).
 ```
 
-In `Schwinger.jl` this be constructed using two strategies, exact diagonalization (`ED`) or matrix product operators (`MPO`).
+In `Schwinger.jl`, the Hamiltonian can be constructed using three computational backends:
+- **Exact Diagonalization (ED)**: Uses sparse matrices for small systems
+- **ITensors**: Uses MPO/MPS via ITensors.jl and ITensorMPS.jl
+- **MPSKit**: Uses MPO/MPS via MPSKit.jl
+
+## Unified API
+
+The unified API allows you to construct operators using any backend by specifying the `backend` keyword argument:
+
+```julia
+# Using symbols
+H = Hamiltonian(lattice; backend=:ED)
+H = Hamiltonian(lattice; backend=:ITensors)  # Default
+H = Hamiltonian(lattice; backend=:MPSKit)
+
+# Using backend types directly
+H = Hamiltonian(lattice; backend=EDBackend())
+H = Hamiltonian(lattice; backend=ITensorsBackend())
+H = Hamiltonian(lattice; backend=MPSKitBackend())
+```
+
+You can also set a default backend programmatically:
+
+```julia
+set_default_backend(:MPSKit)
+H = Hamiltonian(lattice)  # Now uses MPSKit by default
+```
 
 ## Exact diagonalization
 
@@ -20,19 +46,21 @@ When using exact diagonalization, `Schwinger.jl` constructs a basis of states th
 
 ```@example ed
 using Schwinger
-lat = SchwingerLattice{12,1}();
-ham = EDHamiltonian(lat);
+lat = Lattice(12; F = 1);
+ham = Hamiltonian(lat; backend=:ED);
 
 ham.matrix
 ```
+
+You can also use the backend-specific constructor `EDHamiltonian` for backward compatibility.
 
 When $q > 1$, the `universe` (i.e., the allowed values of $L_n$ modulo $q$) can be specified; the default value is 0. When the lattice is periodic, the maximum absolute value of $L_0$ can be set using `L_max`; the default value is 3.
 
 Using [`Arpack.jl`](https://github.com/JuliaLinearAlgebra/Arpack.jl), `Schwinger.jl` can find the lowest eigenstates of a Hamiltonian.
 ```@example eigs
 using Schwinger
-lat = SchwingerLattice{10,1}(periodic = true);
-ham = EDHamiltonian(lat);
+lat = Lattice(10; F = 1, periodic = true);
+ham = Hamiltonian(lat; backend=:ED);
 
 map(energy, loweststates(ham, 5))
 ```
@@ -45,21 +73,41 @@ EDMass
 EDHoppingMass
 ```
 
-## Matrix product operator
+## Matrix product operators
 
-Especially for larger lattice sizes where exact diagonalization is infeasible, `Schwinger.jl` can instead construct a matrix product operator representation of the Hamiltonian. It uses [`ITensors.jl`](https://github.com/ITensor/ITensors.jl) and [`ITensorMPS.jl`](https://github.com/ITensor/ITensorMPS.jl) as the backend for all calculations with this form of the Hamiltonian.
+For larger lattice sizes where exact diagonalization is infeasible, `Schwinger.jl` can construct a matrix product operator representation of the Hamiltonian using two backends:
+
+- **ITensors**: Uses [`ITensors.jl`](https://github.com/ITensor/ITensors.jl) and [`ITensorMPS.jl`](https://github.com/ITensor/ITensorMPS.jl)
+- **MPSKit**: Uses [`MPSKit.jl`](https://github.com/maartenvd/MPSKit.jl)
 
 ```@example mpo
 using Schwinger
-lat = SchwingerLattice{10,1}(periodic = true);
+lat = Lattice(10; F = 1);
 
-[energygap(EDHamiltonian(lat)), energygap(MPOHamiltonian(lat))]
+# Compare energy gaps across backends
+[
+    energygap(Hamiltonian(lat; backend=:ED)),
+    energygap(Hamiltonian(lat; backend=:ITensors)),
+    energygap(Hamiltonian(lat; backend=:MPSKit))
+]
 ```
 
+### ITensors Backend
+
 ```@docs
-MPOHamiltonian
-MPOGaugeKinetic
-MPOHopping
-MPOMass
-MPOHoppingMass
+ITensorHamiltonian
+ITensorGaugeKinetic
+ITensorHopping
+ITensorMass
+ITensorHoppingMass
+```
+
+### MPSKit Backend
+
+```@docs
+MPSKitHamiltonian
+MPSKitGaugeKinetic
+MPSKitHopping
+MPSKitMass
+MPSKitHoppingMass
 ```

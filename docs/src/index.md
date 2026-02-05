@@ -26,7 +26,7 @@ Schwinger.jl provides functions for computing the following properties of the Ha
 - **Correlators**: Expectation values of various operators in the ground state (or other states).
 - **Time evolution**: Action of time evolution on a given initial state.
 
-All of these features are implemented using both exact diagonalization (ED) and matrix product operators/states (MPO).
+All of these features are implemented using three backends: exact diagonalization (ED), ITensors MPO/MPS, and MPSKit MPO/MPS. A unified API allows seamless switching between backends.
 
 ## Usage Example
 
@@ -39,10 +39,11 @@ using Plots
 
 function avgE(θ2π, m, shift = true)
     lat = shift ? 
-        SchwingerLattice{10,1}(θ2π = θ2π, m = m, periodic = true) : 
-        SchwingerLattice{10,1}(θ2π = θ2π, mlat = m, periodic = true)
-    gs = groundstate(EDHamiltonian(lat))
-    return real(expectation(EDAverageElectricField(lat), gs))
+        Lattice(10; F = 1, θ2π = θ2π, m = m, periodic = true) : 
+        Lattice(10; F = 1, θ2π = θ2π, mlat = m, periodic = true)
+    # Using unified API with ED backend
+    gs = groundstate(Hamiltonian(lat; backend=:ED))
+    return real(expectation(AverageElectricField(lat; backend=:ED), gs))
 end
 
 m = 0.05
@@ -77,9 +78,9 @@ using Schwinger
 using Plots
 
 function avgE2(m1, m2)
-    lat = SchwingerLattice{4,2}(θ2π = 0.5, m = (m1, m2), periodic = true)
-    gs = groundstate(EDHamiltonian(lat))
-    return real(expectation(EDAverageElectricField(lat; power=2), gs))
+    lat = Lattice(4; F = 2, θ2π = 0.5, m = [m1, m2], periodic = true)
+    gs = groundstate(Hamiltonian(lat; backend=:ED))
+    return real(expectation(AverageElectricField(lat; backend=:ED, power=2), gs))
 end
 
 ms = -1:0.05:1

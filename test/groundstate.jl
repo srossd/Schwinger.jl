@@ -5,8 +5,8 @@ using ProgressMeter
 
 @testset "Average Electric Field" begin
     @showprogress desc = "Average Electric Field: m = 0" for θ2π=0:.05:1
-        lattice = SchwingerLattice{10,1}(periodic=true, θ2π=θ2π)
-        ground = groundstate(EDHamiltonian(lattice))
+        lattice = Lattice(10; periodic=true, θ2π=θ2π)
+        ground = groundstate(Hamiltonian(lattice, EDBackend()))
         
         efs = electricfields(ground)
         avgE = mean(efs)
@@ -16,8 +16,8 @@ using ProgressMeter
 
     m = 0.1
     @showprogress desc = "Average Electric Field: m/g = 0.1" for θ2π=0:.05:1
-        lattice=SchwingerLattice{10,1}(periodic=true, θ2π=θ2π, m = m)
-        ground = groundstate(EDHamiltonian(lattice))
+        lattice=Lattice(10; periodic=true, θ2π=θ2π, m = m)
+        ground = groundstate(Hamiltonian(lattice, EDBackend()))
         
         efs = electricfields(ground)
         avgE = mean(efs)
@@ -32,9 +32,8 @@ end
 @testset "Scalar VEV" begin
     f(x, L) = 1/(1 - exp(L*cosh(x)/√(π)))
 
-    N=10
     @showprogress desc = "Chiral Condensate (m = 0): L dependence" for L=1:.5:10
-        lattice = SchwingerLattice{N,1}(periodic=true, L=L)
+        lattice = Lattice(10; periodic=true, L=L)
         ground = groundstate(EDHamiltonian(lattice))
         
         condensate = scalar(ground)
@@ -46,11 +45,11 @@ end
     end
 
     L=8
-    lattice = SchwingerLattice{N,1}(periodic=true, L=L)
+    lattice = Lattice(10; periodic=true, L=L)
     ground = groundstate(EDHamiltonian(lattice))
     condensate = scalar(ground)
     @showprogress desc = "Chiral Condensate (m = 0): θ dependence" for θ2π=0:.04:1
-        lattice = SchwingerLattice{N,1}(periodic=true, L=L, θ2π=θ2π)
+        lattice = Lattice(10; periodic=true, L=L, θ2π=θ2π)
         ground = groundstate(EDHamiltonian(lattice))
         
         condensate_ratio = scalar(ground)/condensate
@@ -63,7 +62,7 @@ end
 
 @testset "Wilson loop VEV" begin
     @showprogress desc = "Wilson loop VEV" for L=1:10:1
-        lattice = SchwingerLattice{10,1}(periodic=true, L=L)
+        lattice = Lattice(10; F = 1, periodic=true, L=L)
         ground = groundstate(EDHamiltonian(lattice))
         
         vev = expectation(EDWilsonLoop(lattice), ground)
@@ -76,7 +75,7 @@ end
 
 @testset "Higher charge" begin
     @showprogress desc = "Universes" for p=0:3
-        lattice = SchwingerLattice{10,1}(periodic=true, q = 4)
+        lattice = Lattice(10; F = 1, periodic=true, q = 4)
         gs = groundstate(EDHamiltonian(lattice; universe = p))
 
         arg = atan(pseudoscalar(gs), scalar(gs))

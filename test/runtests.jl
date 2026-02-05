@@ -24,3 +24,9 @@ end
         include("wilson_correlator.jl")
     end
 end
+
+@testset "Infinite lattice tests" begin
+    @testset "Ground state" begin
+        include("infinite_groundstate.jl")
+    end
+end
