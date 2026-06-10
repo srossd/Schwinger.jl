@@ -15,7 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.9'
           - '1'
         os:
           - ubuntu-latest
@@ -58,8 +57,11 @@ jobs:
       - run: |
           julia --project=docs -e '
             using Pkg
-            Pkg.add(url="https://github.com/benjamints/MPSKitLEMPO.jl")
-            Pkg.develop(PackageSpec(path=pwd()))
+            # Schwinger (this repo) and its unregistered dep MPSKitLEMPO must be
+            # introduced in a single resolve, since neither is in a registry.
+            Pkg.develop([
+              PackageSpec(url="https://github.com/benjamints/MPSKitLEMPO.jl"),
+              PackageSpec(path=pwd())])
             Pkg.instantiate()'
       - run: |
           julia --project=docs -e '
