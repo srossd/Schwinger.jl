@@ -9,14 +9,14 @@ Computes the mass operator ∑ (-1)ⁿ χ†ₙχₙ for the Schwinger model.
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+@memoize function EDMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
     N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function massenergy(state::BasisState)
         occs = occupations(state)
         return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j][k]) * occs[j,k] for j=1:N, k=1:F)]
     end
-    return constructoperator(lattice, massenergy; L_max = L_max, universe = universe)
+    return constructoperator(lattice, massenergy; L_max = L_max, universe = universe, in_charge = charge, out_charge = charge)
 end
 
 """
@@ -26,13 +26,13 @@ Computes the gauge kinetic operator ∑(Lₙ+θ/2π)² for the Schwinger model.
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDGaugeKinetic(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+@memoize function EDGaugeKinetic(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function electricenergy(state::BasisState)
         efs = electricfields(state)
         return [(occupations(state), L₀(state)) => (bare ? 1 : lattice.a/2) * sum(efs .^ 2)]
     end
-    return constructoperator(lattice, electricenergy; L_max = L_max, universe = universe)
+    return constructoperator(lattice, electricenergy; L_max = L_max, universe = universe, in_charge = charge, out_charge = charge)
 end
 
 """
@@ -42,7 +42,7 @@ Computes the hopping term -i ∑(χ†ₙ χₙ₊₁ - χ†ₙ₊₁ χₙ) fo
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDHopping(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+@memoize function EDHopping(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
     N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function hopping(state::BasisState)
@@ -75,10 +75,10 @@ Computes the hopping term -i ∑(χ†ₙ χₙ₊₁ - χ†ₙ₊₁ χₙ) fo
         end
         return hops
     end
-    return constructoperator(lattice, hopping; L_max = L_max, universe = universe)
+    return constructoperator(lattice, hopping; L_max = L_max, universe = universe, in_charge = charge, out_charge = charge)
 end
 
-@memoize function EDHoppingMass(lattice::Lattice, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+@memoize function EDHoppingMass(lattice::Lattice, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
     N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function hoppingmass(state::BasisState)
@@ -109,7 +109,7 @@ end
         end
         return hops
     end
-    return constructoperator(lattice, hoppingmass; L_max = L_max, universe = universe)
+    return constructoperator(lattice, hoppingmass; L_max = L_max, universe = universe, in_charge = charge, out_charge = charge)
 end
 
 """
@@ -119,9 +119,9 @@ Computes the hopping-type mass term i/2 ∑(-1)^n (χ†ₙ₊₁ χₙ + χ†�
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDHoppingMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true)
+@memoize function EDHoppingMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
-    return sum(EDHoppingMass.(Ref(lattice), 1:Int(lattice.N); L_max = L_max, universe = universe, bare = bare))
+    return sum(EDHoppingMass.(Ref(lattice), 1:Int(lattice.N); L_max = L_max, universe = universe, bare = bare, charge = charge))
 end
 
 """
@@ -131,12 +131,21 @@ Computes the Hamiltonian for the Schwinger model.
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDHamiltonian(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0)
+@memoize function EDHamiltonian(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0,
+                                charge::Int = 0, defects::Vector{DefectCharge} = DefectCharge[])
+    if !isempty(defects)   # a defect charge is a θ2π step internally, but we keep the
+        # original (unshifted) lattice on the operator and record the defect list. The
+        # defect's charge lives in the flux (θ shift), NOT in the matter filling, so the
+        # matter sector is `charge` (default 0, neutral) — the same one acted on by the
+        # charge-changing `FermionField` when building a Wilson line.
+        op = EDHamiltonian(_lattice_with_defects(lattice, defects); L_max = L_max, universe = universe, charge = charge)
+        return EDOperator(lattice, op.matrix, op.L_max, op.universe, charge, charge, defects)
+    end
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
-    return  EDGaugeKinetic(lattice; L_max = L_max, universe = universe, bare = false) + 
-            EDMass(lattice; L_max = L_max, universe = universe, bare = false) + 
-            EDHopping(lattice; L_max = L_max, universe = universe, bare = false) + 
-            EDHoppingMass(lattice; L_max = L_max, universe = universe, bare = false)
+    return  EDGaugeKinetic(lattice; L_max = L_max, universe = universe, bare = false, charge = charge) +
+            EDMass(lattice; L_max = L_max, universe = universe, bare = false, charge = charge) +
+            EDHopping(lattice; L_max = L_max, universe = universe, bare = false, charge = charge) +
+            EDHoppingMass(lattice; L_max = L_max, universe = universe, bare = false, charge = charge)
 end
 
 # =============================================================================
@@ -166,13 +175,13 @@ function opsum_gaugekinetic(lattice::Lattice; universe::Int = 0, bare::Bool = tr
     end
 
     term += sum(θ2πu[1:N] .^ 2),"Id",1
-    term += -q * F * sum(θ2πu[1:N]) / 2,"Id",1
+    term += -q * F * sum(θ2πu[1:2:N]),"Id",1   # 2·Σₙ θₙ Gₙ  (Gₙ ∝ Σ_{m≤n}(-1)ᵐ)
     term += q^2 * N * F^2 / 8,"Id",1
 
-    for j in 1:N-1
+    for j in 1:N
         for k in 1:F
             ind = F*(j - 1) + k
-            term += 2q * sum(θ2πu[j+1:N]),"Sz",ind
+            term += 2q * sum(θ2πu[j:N]),"Sz",ind   # Sz_j couples to θ on links n ≥ j
         end
     end
 
@@ -363,7 +372,15 @@ Computes the MPO Hamiltonian for the Schwinger model.
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function ITensorHamiltonian(lattice::Lattice; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, sites::Union{Vector{Index{T}},Nothing} = nothing) where {T}
+@memoize function ITensorHamiltonian(lattice::Lattice; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, sites::Union{AbstractVector{<:Index},Nothing} = nothing, defects::Vector{DefectCharge} = DefectCharge[])
+    if !isempty(defects)   # θ2π step internally; keep the original lattice + defect list
+        L_max_p, _ = process_L_max_universe(lattice, L_max, universe)
+        # build the (θ-shifted) MPO on the ORIGINAL lattice's site indices so that the
+        # operator stays compatible with states built from the original lattice
+        sites_orig = isnothing(sites) ? get_sites(lattice; L_max = L_max_p) : sites
+        op = ITensorHamiltonian(_lattice_with_defects(lattice, defects); L_max = L_max, universe = universe, sites = sites_orig)
+        return ITensorOperator(lattice, op.mpo, op.L_max, op.universe, defects)
+    end
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
     hamiltonian =   opsum_gaugekinetic(lattice; bare = false, universe = universe) +
@@ -684,6 +701,32 @@ Computes the MPSKit hopping-mass operator for the Schwinger model.
     return MPSKitOperator(lattice, mpo, universe)
 end
 
+# Combined matter MPO channel-matrices (hopping + mass + hopping-mass), before any defect
+# handling or boundary trimming, together with the gauge operator (for its link functions).
+# Shared by `MPSKitHamiltonian` and the fused-defect LEMPO builder.
+function _matter_mpo_matrices(lattice::Lattice; universe::Int = 0)
+    Amass = matrices_mass(lattice)
+    Ahoppingmass = matrices_hoppingmass(lattice)
+    A = matrices_hopping(lattice)
+    for n in eachindex(A)
+        A[n][1, end] = Amass[n][1, end]
+        for k in 1:lattice.F
+            A[n][1, 1 + 2*(k - 1) + 1] += Ahoppingmass[n][1, 1 + 2*(k - 1) + 1]
+            A[n][1, 1 + 2*(k - 1) + 2] += Ahoppingmass[n][1, 1 + 2*(k - 1) + 2]
+        end
+    end
+    return A, MPSKitGaugeKinetic(lattice; universe = universe)
+end
+
+# Trim the boundary channels of a finite matter MPO channel-matrix list (in place).
+function _trim_finite_mpo!(A, F::Int)
+    A[1] = A[1][1:1, :]
+    for j in 2:F, k in 2:(2F + 1); A[j][k, end] = missing; end
+    for j in (length(A) - F + 1):(length(A) - 1), k in 2:(2F + 1); A[j][1, k] = missing; end
+    A[end] = A[end][:, end:end]
+    return A
+end
+
 """
 `MPSKitHamiltonian(lattice)`
 
@@ -692,43 +735,59 @@ Computes the MPSKit Hamiltonian for the Schwinger model.
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function MPSKitHamiltonian(lattice::Lattice; universe::Int = 0)
-    Amass = matrices_mass(lattice)
-    Ahoppingmass = matrices_hoppingmass(lattice)
-    A = matrices_hopping(lattice)
-    gauge = MPSKitGaugeKinetic(lattice; universe = universe)
+@memoize function MPSKitHamiltonian(lattice::Lattice; universe::Int = 0,
+                                    defects::Vector{DefectCharge} = DefectCharge[])
+    isinf(lattice.N) && !isempty(defects) &&
+        throw(ArgumentError("defects are not supported for infinite lattices"))
 
-    for n in eachindex(A)
-        A[n][1, end] = Amass[n][1, end]
+    A, gauge = _matter_mpo_matrices(lattice; universe = universe)
+
+    # Insert a static defect as a genuine extra lattice site: an inert MPO site
+    # that passes every channel through as identity (so the matter Hamiltonian
+    # acts across it unchanged) on a 1-D `U1Space(charge=>1)` physical leg, plus a
+    # zero-width (`missing`) gauge link after it.  The charge enters the LEMPO's
+    # Gauss-law accumulation automatically, shifting all links to its right.
+    link_fcts = isempty(defects) ? gauge.lempo.link_fcts : collect(Any, gauge.lempo.link_fcts)
+    if !isempty(defects)
+        Wsize = size(A[1], 1)                       # 2 + 2F MPO channels
+        # virtual (bond) space carried by each MPO channel: identity-in/out and
+        # the Hamiltonian accumulator carry charge 0; hop-left/right carry ±q.
+        levelspace = Vector{Any}(undef, Wsize)
+        levelspace[1] = U1Space(0 => 1); levelspace[Wsize] = U1Space(0 => 1)
         for k in 1:lattice.F
-            A[n][1, 1 + 2*(k - 1) + 1] += Ahoppingmass[n][1, 1 + 2*(k - 1) + 1]
-            A[n][1, 1 + 2*(k - 1) + 2] += Ahoppingmass[n][1, 1 + 2*(k - 1) + 2]
+            levelspace[1 + 2*(k-1) + 1] = U1Space( lattice.q => 1)
+            levelspace[1 + 2*(k-1) + 2] = U1Space(-lattice.q => 1)
+        end
+        for d in sort(collect(defects); by = x -> x.link, rev = true)   # right-to-left
+            (2 ≤ d.link ≤ Int(lattice.N)) ||
+                throw(ArgumentError("defect link $(d.link) must lie in 2:$(Int(lattice.N))"))
+            idx = (d.link - 1) * lattice.F + 1   # between physical sites link-1 and link
+            Pdef = U1Space(d.charge => 1)
+            Wdef = Matrix{eltype(A[1])}(missing, Wsize, Wsize)
+            # corners (identity-in / accumulator channels): scalar 1.0 → braiding;
+            # middle channels (hop-left/right): explicit identity on the 1-D leg.
+            Wdef[1, 1] = 1.0
+            Wdef[Wsize, Wsize] = 1.0
+            for i in 2:Wsize-1
+                Wdef[i, i] = ones(levelspace[i] ⊗ Pdef ← Pdef ⊗ levelspace[i])
+            end
+            insert!(A, idx, Wdef)
+            insert!(link_fcts, idx, missing)
         end
     end
 
     if isinf(lattice.N)
         mpo = InfiniteMPOHamiltonian(A)
     else
-        A[1] = A[1][1:1, :]
-        for j=2:lattice.F
-            for k=2:(2*lattice.F + 1)
-                A[j][k, end] = missing
-            end
-        end
-        for j=length(A) - lattice.F + 1:length(A) - 1
-            for k=2:(2*lattice.F + 1)
-                A[j][1, k] = missing
-            end
-        end
-        A[end] = A[end][:, end:end]
+        _trim_finite_mpo!(A, lattice.F)
         mpo = FiniteMPOHamiltonian(A)
     end
 
     lempo = if isinf(lattice.N)
-        InfiniteLEMPOHamiltonian(mpo, gauge.lempo.link_fcts)
+        InfiniteLEMPOHamiltonian(mpo, link_fcts)
     else
-        FiniteLEMPOHamiltonian(mpo, gauge.lempo.link_fcts)
+        FiniteLEMPOHamiltonian(mpo, link_fcts)
     end
 
-    return MPSKitOperator(lattice, lempo, universe)
+    return MPSKitOperator(lattice, lempo, universe, defects)
 end

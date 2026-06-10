@@ -9,7 +9,8 @@ makedocs(sitename="Schwinger.jl Documentation",
                         "man/hamiltonian.md",
                         "man/states.md",
                         "man/operators.md",
-                        "man/timeevolution.md"]
+                        "man/timeevolution.md",
+                        "man/defects.md"]
          ],
          format = Documenter.HTML(prettyurls = false)
 )

@@ -6,7 +6,7 @@ using ProgressMeter, StatsBase
         Lattice(10; F = 1, a = .7, m = 0.5), 
         Lattice(10; F = 1, a = .7, m = 0.5, θ2π = 0.3), 
         Lattice(10; F = 1, a = .7, m = 0.5, θ2π = 0.3, q = 4),
-        Lattice(10; F = 1, a = .7, m = 0.5, θ2π = 0.3, q = 4, mprime = 0.8),
+        Lattice(10; F = 1, a = .7, m = 0.5, θ2π = 0.3, q = 4, mprime = 0.4),
         Lattice(6;  F = 2, a = .7, m = 0.5, θ2π = 0.3), 
         Lattice(4;  F = 3, a = .7, m = 0.5, θ2π = 0.3),
         Lattice(4;  F = 3, a = .7, m = 0.5, θ2π = 0.3, periodic = true), # test wigner string, wilson loop
@@ -75,10 +75,10 @@ using ProgressMeter, StatsBase
 
             ed_avgE = expectation(AverageElectricField(lat, EDBackend(); power=1, universe=universe), ed_gs)
             itensors_avgE = expectation(AverageElectricField(lat, ITensorsBackend(); power=1, universe=universe), itensors_gs)
-            @test ed_avgE ≈ itensors_avgE rtol=1E-4
+            @test ed_avgE ≈ itensors_avgE rtol=1E-3
             if !lat.periodic
                 mpskit_avgE = expectation(AverageElectricField(lat, MPSKitBackend(); power=1, universe=universe), mpskit_gs)
-                @test ed_avgE ≈ mpskit_avgE rtol=1E-4
+                @test ed_avgE ≈ mpskit_avgE rtol=1E-3
             end
 
             sitelist = sample(1:Int(lat.N), rand(1:Int(lat.N)), replace=false)

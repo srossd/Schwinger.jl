@@ -3,6 +3,10 @@ module Schwinger
 # Lattice
 export Lattice, LatticeSize
 
+# Defects
+export DefectCharge, defects, translate_defect, insert_defect, remove_defect
+export FermionField, EDFermionField, ITensorFermionField, MPSKitFermionField
+
 # Backend types
 export Backend, EDBackend, ITensorsBackend, MPSKitBackend
 export ED, ITensorsMPS, MPSKitMPS
@@ -29,6 +33,7 @@ export EDAverageElectricField, ITensorAverageElectricField, MPSKitAverageElectri
 # State operations
 export lattice
 export loweststates, groundstate, energygap
+export wavepacket
 export expectation, act
 export evolve
 
@@ -51,6 +56,7 @@ using TensorKit
 # Numerical libraries
 using Arpack
 using KrylovKit
+using MatrixAlgebraKit
 
 # Standard libraries
 using Combinatorics
@@ -65,6 +71,7 @@ using Memoize
 
 # Include files in dependency order
 include("./lattice.jl")
+include("./defects.jl")
 include("./backends.jl")
 include("./operators.jl")
 include("./utility.jl")

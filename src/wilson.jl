@@ -205,3 +205,108 @@ function MPSKitWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int
     mpo = FiniteMPOHamiltonian(A)
     return MPSKitOperator(lattice, mpo, universe)
 end
+# =============================================================================
+# Single staggered-fermion field  φ̃_s = ∏_{k<s}(±iσ^z_k) σ∓_s   (MPSKit)
+# =============================================================================
+
+"""
+`MPSKitFermionField(lattice, site; dagger=false, flavor=1, universe=0)`
+
+The single staggered-fermion field `φ̃_site = ∏_{k<site}(-iσ^z_k) σ⁻_site`
+(annihilation; `dagger=true` gives the creation field with `σ⁺` and `+iσ^z`).
+
+Unlike `MPSKitWilsonLine` (a charge-conserving bilinear), this is a *single* fermion
+field: it changes the total U(1) charge by `∓q`, so acting with it sends the MPS into
+a different symmetry sector. Returned as an `MPSKitOperator`; apply with `act`/`*`.
+"""
+function MPSKitFermionField(lattice::Lattice, site::Int; dagger::Bool = false, flavor::Int = 1, universe::Int = 0)
+    if lattice.periodic
+        throw(ArgumentError("MPSKitFermionField not implemented for periodic lattices"))
+    end
+    if isinf(lattice.N)
+        throw(ArgumentError("MPSKitFermionField not implemented for infinite lattices"))
+    end
+    _, universe = process_L_max_universe(lattice, 0, universe)
+    N, F = Int(lattice.N), lattice.F
+    q = lattice.q
+    spaces = get_mpskit_spaces(lattice)
+    ind = F * (site - 1) + flavor          # MPSKit index carrying the fermion operator
+    Δq    = dagger ? q : -q                # charge injected into the bond (to the right)
+    phase = dagger ? 1im : -1im            # JW string factor (±i)·σ^z to the left
+
+    siteop(P) = ones(ComplexF64, U1Space(0 => 1) ⊗ P ← P ⊗ U1Space(Δq => 1))   # σ∓
+    function jwstr(P)                       # (±i)·σ^z  (diagonal: empty −1, occupied +1)
+        T = zeros(ComplexF64, U1Space(0 => 1) ⊗ P ← P ⊗ U1Space(0 => 1))
+        for (i, c) in enumerate(sort(collect(sectors(P)); by = c -> c.charge))
+            block(T, c) .= phase * (i == 2 ? 1.0 : -1.0)
+        end
+        return T
+    end
+    passthru(P) = isomorphism(ComplexF64, U1Space(Δq => 1) ⊗ P, P ⊗ U1Space(Δq => 1))
+
+    MPOT = typeof(siteop(spaces[ind]))
+    ts = MPOT[k < ind ? jwstr(spaces[k]) : k == ind ? siteop(spaces[k]) : passthru(spaces[k]) for k in 1:N*F]
+    return MPSKitOperator(lattice, FiniteMPO(ts), universe)
+end
+
+"""
+`EDFermionField(lattice, site; dagger=false, flavor=1)`
+
+ED version of the staggered fermion field `φ̃_site` (annihilation; `dagger=true` for
+creation), as a sparse operator with the Jordan–Wigner string. It maps the
+charge-`c` sector to the charge-`c ∓ q` sector (annihilation/creation), so acting
+with it on the (charge-neutral) vacuum lands in the charge-`∓q` basis.
+
+!!! note
+    The ED Hamiltonian uses the imaginary staggered hopping `−i(χ†ₙχₙ₊₁ − h.c.)`, while
+    the Jordan–Wigner string here is in the real-hopping gauge of the ITensors/MPSKit
+    backends. The two differ by `χₙ → (∓i)ⁿ χₙ`, so a staggered factor `(∓i)^site` keeps
+    the field consistent with the ED ground state.
+"""
+function EDFermionField(lattice::Lattice, site::Int; dagger::Bool = false, flavor::Int = 1,
+                        L_max::Union{Nothing,Int} = nothing, universe::Int = 0)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    F = lattice.F
+    ind = F * (site - 1) + flavor
+    phase = dagger ? 1im : -1im
+    stagger = phase^site                       # gauge factor for ED's imaginary hopping
+    function action(state::BasisState)
+        occs = occupations(state)
+        occs[site, flavor] == (dagger ? 0 : 1) || return Pair{Tuple{BitMatrix,Int},ComplexF64}[]
+        new = copy(occs)
+        new[site, flavor] = dagger ? 1 : 0
+        sgn = ComplexF64(phase^(ind - 1)) * stagger
+        for k in 1:ind-1                       # Jordan–Wigner σ^z string (σ^z = 2n−1)
+            sgn *= (2 * occs[(k - 1) ÷ F + 1, (k - 1) % F + 1] - 1)
+        end
+        return [(BitMatrix(new), L₀(state)) => sgn]
+    end
+    # σ⁻ removes a charge-q fermion (out_charge = −q); the creation field adds one (+q).
+    out_charge = dagger ? lattice.q : -lattice.q
+    return constructoperator(lattice, action; L_max = L_max, universe = universe, in_charge = 0, out_charge = out_charge)
+end
+
+"""
+`ITensorFermionField(lattice, site; dagger=false, flavor=1)`
+
+ITensors version of the staggered fermion field `φ̃_site` (annihilation; `dagger=true`
+for creation): the single-site `S∓` operator dressed with the Jordan–Wigner `σ^z`
+string, as an MPO. Acting with it changes the total quantum number of the MPS.
+"""
+function ITensorFermionField(lattice::Lattice, site::Int; dagger::Bool = false, flavor::Int = 1,
+                             L_max::Union{Nothing,Int} = nothing, universe::Int = 0,
+                             sites::Union{AbstractVector{<:Index},Nothing} = nothing)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    F = lattice.F
+    ind = F * (site - 1) + flavor
+    phase = dagger ? 1im : -1im
+    term = Any[(2 * phase)^(ind - 1)]          # σ^z = 2·Sz  ⇒  (±2i)^(ind−1)
+    for k in 1:ind-1
+        push!(term, "Sz", k)
+    end
+    push!(term, dagger ? "S+" : "S-", ind)
+    os = OpSum()
+    os += Tuple(term)
+    mpo = ITensorMPS.MPO(os, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
+end

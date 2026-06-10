@@ -32,25 +32,35 @@ struct EDOperator <: SchwingerOperator
     matrix::SparseMatrixCSC{ComplexF64,Int64}
     L_max::Int
     universe::Int
+    in_charge::Int
+    out_charge::Int
+    defects::Vector{DefectCharge}
 
-    function EDOperator(lattice::Lattice, matrix::SparseMatrixCSC{ComplexF64,Int64}, L_max::Int, universe::Int)
+    function EDOperator(lattice::Lattice, matrix::SparseMatrixCSC{ComplexF64,Int64}, L_max::Int, universe::Int,
+                       in_charge::Int = 0, out_charge::Int = 0,
+                       defects::Vector{DefectCharge} = DefectCharge[])
         N, F = lattice.N, lattice.F
-        return new(lattice, matrix, L_max, universe)
+        return new(lattice, matrix, L_max, universe, in_charge, out_charge, defects)
     end
 end
 
-function Base.:+(op1::EDOperator, op2::EDOperator) 
+function Base.:+(op1::EDOperator, op2::EDOperator)
     validate_operator_compatibility(op1, op2, "add")
-    return EDOperator(op1.lattice, op1.matrix + op2.matrix, op1.L_max, op1.universe)
+    (op1.in_charge == op2.in_charge && op1.out_charge == op2.out_charge) ||
+        throw(ArgumentError("cannot add operators with different in/out charges"))
+    return EDOperator(op1.lattice, op1.matrix + op2.matrix, op1.L_max, op1.universe, op1.in_charge, op1.out_charge)
 end
 
-function Base.:*(op1::EDOperator, op2::EDOperator) 
+function Base.:*(op1::EDOperator, op2::EDOperator)
     validate_operator_compatibility(op1, op2, "multiply")
-    return EDOperator(op1.lattice, op1.matrix * op2.matrix, op1.L_max, op1.universe)
+    # op1 * op2 applies op2 first: op2's output sector must be op1's input sector.
+    op1.in_charge == op2.out_charge ||
+        throw(ArgumentError("incompatible charges: cannot apply in_charge=$(op1.in_charge) operator to out_charge=$(op2.out_charge) result"))
+    return EDOperator(op1.lattice, op1.matrix * op2.matrix, op1.L_max, op1.universe, op2.in_charge, op1.out_charge)
 end
 
-@inline function Base.:*(scalar::Number, op::EDOperator) 
-    return EDOperator(op.lattice, scalar * op.matrix, op.L_max, op.universe)
+@inline function Base.:*(scalar::Number, op::EDOperator)
+    return EDOperator(op.lattice, scalar * op.matrix, op.L_max, op.universe, op.in_charge, op.out_charge)
 end
 
 # =============================================================================
@@ -62,10 +72,12 @@ struct ITensorOperator <: SchwingerOperator
     mpo::ITensorMPS.MPO
     L_max::Int
     universe::Int
+    defects::Vector{DefectCharge}
 
-    function ITensorOperator(lattice::Lattice, mpo::ITensorMPS.MPO, L_max::Int, universe::Int)
+    function ITensorOperator(lattice::Lattice, mpo::ITensorMPS.MPO, L_max::Int, universe::Int,
+                            defects::Vector{DefectCharge} = DefectCharge[])
         N, F = lattice.N, lattice.F
-        return new(lattice, mpo, L_max, universe)
+        return new(lattice, mpo, L_max, universe, defects)
     end
 end
 
@@ -91,9 +103,11 @@ struct MPSKitOperator <: SchwingerOperator
     lattice::Lattice
     lempo::MPSKit.AbstractMPO
     universe::Int
+    defects::Vector{DefectCharge}
 
-    function MPSKitOperator(lattice::Lattice, lempo::MPSKit.AbstractMPO, universe::Int = 0)
-        return new(lattice, lempo, universe)
+    function MPSKitOperator(lattice::Lattice, lempo::MPSKit.AbstractMPO, universe::Int = 0,
+                           defects::Vector{DefectCharge} = DefectCharge[])
+        return new(lattice, lempo, universe, defects)
     end
 end
 

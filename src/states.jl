@@ -21,6 +21,9 @@ function validate_state_operator_compatibility(op::SchwingerOperator, state::Sch
     if op.universe != state.hamiltonian.universe
         throw(ArgumentError("Operator universe $(op.universe) does not match state universe $(state.hamiltonian.universe)"))
     end
+    if isa(op, EDOperator) && isa(state, EDState) && op.in_charge != state.net_charge
+        throw(ArgumentError("Operator in_charge $(op.in_charge) does not match state net_charge $(state.net_charge)"))
+    end
 end
 
 """
@@ -38,8 +41,8 @@ struct BasisState <: SchwingerState
         if size(occupations) != (lattice.N, lattice.F)
             throw(ArgumentError("occupations must be an NxF BitMatrix"))
         end
-        if sum(occupations) != (lattice.N * lattice.F) ÷ 2
-            throw(ArgumentError("occupations must have N*F/2 occupied sites"))
+        if !(0 ≤ sum(occupations) ≤ lattice.N * lattice.F)
+            throw(ArgumentError("number of occupied sites must lie in 0:N*F"))
         end
         if q < 1
             throw(ArgumentError("q must be ≥ 1"))
@@ -48,8 +51,8 @@ struct BasisState <: SchwingerState
     end
 end
 
-function nstates(N::Int, F::Int; L_max::Int = 3)
-    return (2*L_max+1)*binomial(N*F, N*F÷2)
+function nstates(N::Int, F::Int; L_max::Int = 3, fill::Int = N*F÷2)
+    return (2*L_max+1)*binomial(N*F, fill)
 end
 
 function lattice(state::BasisState)
@@ -67,7 +70,8 @@ Returns a basis of Schwinger model states.
 - `q::Int`
 - `universe::Int`
 """
-@memoize function schwingerbasis(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0)
+@memoize function schwingerbasis(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0,
+                                 net_charge::Int = 0)
     N, F = Int(lattice.N), lattice.F
     if !isnothing(L_max) && L_max < 0
         throw(ArgumentError("L_max must be non-negative"))
@@ -78,10 +82,18 @@ Returns a basis of Schwinger model states.
 
     L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
 
-    states = Vector{BasisState}(undef, nstates(Int(N), F; L_max = L_max))
+    # matter charge c relates to occupation by c = q*(Σocc − N*F/2), so a sector of total
+    # charge `net_charge` is the set of configurations with this many occupied sites:
+    net_charge % lattice.q == 0 ||
+        throw(ArgumentError("net_charge $net_charge must be a multiple of q = $(lattice.q)"))
+    fill = N*F÷2 + net_charge ÷ lattice.q
+    (0 ≤ fill ≤ N*F) ||
+        throw(ArgumentError("net_charge $net_charge is out of range for an $N×$F lattice"))
+
+    states = Vector{BasisState}(undef, nstates(Int(N), F; L_max = L_max, fill = fill))
     stateidx = 1
     for L₀ in ((-L_max:L_max) .* lattice.q) .+ universe
-        for comb in combinations(1:N*F, N*F÷2)
+        for comb in combinations(1:N*F, fill)
             occupations = BitMatrix(undef, N, F)
             for idx in comb
                 occupations[idx] = true
@@ -93,8 +105,9 @@ Returns a basis of Schwinger model states.
     return states
 end
 
-@memoize function positionindex(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0)
-    states = schwingerbasis(lattice; L_max = L_max, universe = universe)
+@memoize function positionindex(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0,
+                                net_charge::Int = 0)
+    states = schwingerbasis(lattice; L_max = L_max, universe = universe, net_charge = net_charge)
     return Dict{Tuple{BitMatrix,Int},Int}((states[i].occupations, states[i].L₀) => i for i in eachindex(states))
 end
 
@@ -106,9 +119,13 @@ A Schwinger model state represented as a linear combination of basis states.
 struct EDState <: SchwingerState
     hamiltonian::EDOperator
     coeffs::Vector{ComplexF64}
+    defects::Vector{DefectCharge}
+    net_charge::Int
 
-    function EDState(hamiltonian::EDOperator, coeffs::Vector{ComplexF64})
-        new(hamiltonian, coeffs)
+    function EDState(hamiltonian::EDOperator, coeffs::Vector{ComplexF64},
+                     defects::Vector{DefectCharge} = hamiltonian.defects,
+                     net_charge::Int = hamiltonian.in_charge)
+        new(hamiltonian, coeffs, defects, net_charge)
     end
 end
 
@@ -116,8 +133,14 @@ function lattice(state::EDState)
     return state.hamiltonian.lattice
 end
 
+# the basis an EDState's coefficients are expressed in (its matter charge sector)
+function _edbasis(state::EDState)
+    return schwingerbasis(lattice(state); L_max = state.hamiltonian.L_max,
+                          universe = state.hamiltonian.universe, net_charge = state.net_charge)
+end
+
 function Base.:*(scalar::Number, state::EDState)
-    return EDState(state.hamiltonian, scalar * state.coeffs)
+    return EDState(state.hamiltonian, scalar * state.coeffs, state.defects, state.net_charge)
 end
 
 function Base.:*(state::EDState, scalar::Number)
@@ -132,9 +155,11 @@ A Schwinger model MPS.
 struct ITensorState <: SchwingerState
     hamiltonian::ITensorOperator
     psi::ITensorMPS.MPS
+    defects::Vector{DefectCharge}
 
-    function ITensorState(hamiltonian::ITensorOperator, psi::ITensorMPS.MPS)
-        new(hamiltonian, psi)
+    function ITensorState(hamiltonian::ITensorOperator, psi::ITensorMPS.MPS,
+                          defects::Vector{DefectCharge} = hamiltonian.defects)
+        new(hamiltonian, psi, defects)
     end
 end
 
@@ -143,7 +168,7 @@ function lattice(state::ITensorState)
 end
 
 function Base.:*(scalar::Number, state::ITensorState)
-    return ITensorState(state.hamiltonian, scalar * state.psi)
+    return ITensorState(state.hamiltonian, scalar * state.psi, state.defects)
 end
 
 function Base.:*(state::ITensorState, scalar::Number)
@@ -162,11 +187,17 @@ A Schwinger model MPS using MPSKit.jl.
 struct MPSKitState <: SchwingerState
     hamiltonian::MPSKitOperator
     psi::MPSKit.AbstractMPS
+    defects::Vector{DefectCharge}
 
-    function MPSKitState(hamiltonian::MPSKitOperator, psi::MPSKit.AbstractMPS)
-        isinf(hamiltonian.lattice) == (psi isa InfiniteMPS) || throw(ArgumentError("Hamiltonian and state must both be finite or infinite"))
-        (psi isa InfiniteMPS) || (length(psi) == Int(hamiltonian.lattice.N) * hamiltonian.lattice.F) || throw(ArgumentError("State length does not match Hamiltonian lattice size"))
-        new(hamiltonian, psi)
+    function MPSKitState(hamiltonian::MPSKitOperator, psi::MPSKit.AbstractMPS,
+                         defects::Vector{DefectCharge} = hamiltonian.defects)
+        if psi isa WindowMPS
+            isinf(hamiltonian.lattice) || throw(ArgumentError("WindowMPS requires an infinite-lattice Hamiltonian"))
+        else
+            isinf(hamiltonian.lattice) == (psi isa InfiniteMPS) || throw(ArgumentError("Hamiltonian and state must both be finite or infinite"))
+            (psi isa InfiniteMPS) || (length(psi) == Int(hamiltonian.lattice.N) * hamiltonian.lattice.F + length(defects)) || throw(ArgumentError("State length does not match Hamiltonian lattice size"))
+        end
+        new(hamiltonian, psi, defects)
     end
 end
 
@@ -174,12 +205,310 @@ function lattice(state::MPSKitState)
     return state.hamiltonian.lattice
 end
 
+"""
+`defects(x)`
+
+Return the list of static `DefectCharge`s carried by an operator or state. The
+operator/state keeps the *original* (unshifted) lattice and this defect list,
+uniformly across backends — ED/ITensors encode the defects as a θ2π step in the
+stored matrix/MPO, MPSKit as an extra (hidden) lattice site.
+"""
+defects(op::EDOperator)      = op.defects
+defects(op::ITensorOperator) = op.defects
+defects(op::MPSKitOperator)  = op.defects
+defects(state::Union{EDState,ITensorState,MPSKitState}) = state.defects
+defects(::SchwingerState) = DefectCharge[]
+
+"""
+    translate_defect(state, defect::DefectCharge, new_link::Int)
+
+Move the static `defect` (which must be in `defects(state)`) to link `new_link`,
+returning a new state with the static charge relocated. The matter wavefunction is
+unchanged — only the charge's position moves — so `occupations` are preserved while
+`electricfields` shift. For ED/ITensors this merely updates the defect list (the
+coefficients/MPS are untouched); for MPSKit the extra defect site is physically moved
+within the MPS by an exact fuse/split, so the result is again a valid MPS.
+
+The returned state keeps the original `hamiltonian`; build
+`Hamiltonian(lattice(state); defects = defects(state))` if you need the matching
+Hamiltonian for energy/evolution at the new charge location.
+"""
+function translate_defect(state::EDState, defect::DefectCharge, new_link::Int)
+    return EDState(state.hamiltonian, state.coeffs, _edit_defect(state.defects, defect, DefectCharge(new_link, defect.charge)), state.net_charge)
+end
+function translate_defect(state::ITensorState, defect::DefectCharge, new_link::Int)
+    return ITensorState(state.hamiltonian, state.psi, _edit_defect(state.defects, defect, DefectCharge(new_link, defect.charge)))
+end
+function translate_defect(state::MPSKitState, defect::DefectCharge, new_link::Int)
+    newdefs = _edit_defect(state.defects, defect, DefectCharge(new_link, defect.charge))
+    lat  = state.hamiltonian.lattice
+    from = _defect_position(lat, state.defects, defect)
+    to   = _defect_position(lat, newdefs, DefectCharge(new_link, defect.charge))
+    return MPSKitState(state.hamiltonian, _move_mps_defect(state.psi, from, to), newdefs)
+end
+
+"""
+    insert_defect(state, link, charge)
+
+Insert a static `DefectCharge(link, charge)` into `state`, returning a new state.
+This is the way to begin/end a Wilson line and is **non-gauge-invariant**: the total
+charge changes by `charge`. ED/ITensors merely add the defect to the list (the
+coefficients/MPS are untouched); MPSKit inserts the extra 1-D defect site at `link`
+and bumps the virtual spaces of all tensors to its right.
+"""
+insert_defect(state::EDState, link::Int, charge::Int) =
+    EDState(state.hamiltonian, state.coeffs, vcat(state.defects, DefectCharge(link, charge)), state.net_charge)
+insert_defect(state::ITensorState, link::Int, charge::Int) =
+    ITensorState(state.hamiltonian, state.psi, vcat(state.defects, DefectCharge(link, charge)))
+function insert_defect(state::MPSKitState, link::Int, charge::Int)
+    newdefs = vcat(state.defects, DefectCharge(link, charge))
+    pos = _defect_position(state.hamiltonian.lattice, newdefs, DefectCharge(link, charge))
+    return MPSKitState(state.hamiltonian, _insert_mps_defect(state.psi, pos, charge), newdefs)
+end
+
+"""
+    remove_defect(state, defect::DefectCharge)
+
+Remove `defect` (which must be present) from `state`; inverse of `insert_defect`.
+"""
+remove_defect(state::EDState, defect::DefectCharge) =
+    EDState(state.hamiltonian, state.coeffs, _edit_defect(state.defects, defect, nothing), state.net_charge)
+remove_defect(state::ITensorState, defect::DefectCharge) =
+    ITensorState(state.hamiltonian, state.psi, _edit_defect(state.defects, defect, nothing))
+function remove_defect(state::MPSKitState, defect::DefectCharge)
+    pos = _defect_position(state.hamiltonian.lattice, state.defects, defect)
+    return MPSKitState(state.hamiltonian, _remove_mps_defect(state.psi, pos), _edit_defect(state.defects, defect, nothing))
+end
+
 function Base.:*(scalar::Number, state::MPSKitState)
-    return MPSKitState(state.hamiltonian, scalar * state.psi)
+    return MPSKitState(state.hamiltonian, scalar * state.psi, state.defects)
 end
 
 function Base.:*(state::MPSKitState, scalar::Number)
     return scalar * state
+end
+
+struct MPSKitQPState <: SchwingerState
+    hamiltonian::MPSKitOperator
+    psi::MPSKit.QP
+
+    function MPSKitQPState(hamiltonian::MPSKitOperator, psi::MPSKit.QP)
+        isinf(hamiltonian.lattice) || throw(ArgumentError("Quasiparticle ansatz only supported for infinite lattices"))
+        new(hamiltonian, psi)
+    end
+end
+
+function lattice(state::MPSKitQPState)
+    return state.hamiltonian.lattice
+end
+
+function Base.:*(scalar::Number, state::MPSKitQPState)
+    return MPSKitQPState(state.hamiltonian, scalar * state.psi)
+end
+
+function Base.:*(state::MPSKitQPState, scalar::Number)
+    return scalar * state
+end
+
+"""
+    wavepacket(state::MPSKitQPState, W::Int; support=1:W, weights=nothing)
+
+Build a wavepacket `MPSKitState` from an infinite quasiparticle state.
+
+The total window has `W` sites. The B tensor is summed only over the sites in
+`support` (a `UnitRange`, default `1:W`), so sites outside `support` are pure
+ground state. This lets you build a spatially localized wavepacket inside a
+larger window — e.g. `W=100, support=10:20`.
+
+`weights` gives one complex amplitude per site in `support`. If `nothing`, the
+default is `exp(im·p·k)` for each site k ∈ support (the QP momentum phase),
+giving a position-space truncation of a momentum eigenstate.
+
+The result is an `MPSKitState` wrapping a `WindowMPS` whose left/right environments
+are the QP's `left_gs`/`right_gs`. The construction follows MPSKit's
+`convert(FiniteMPS, v::QP{FiniteMPS})`, adapted for the infinite case.
+
+!!! note
+    Assumes a non-topological excitation (trivial auxiliary sector).
+"""
+function wavepacket(state::MPSKitQPState, W::Int;
+                      support::UnitRange{Int}=1:W,
+                      sigma::Union{Nothing,Real}=nothing,
+                      center::Union{Nothing,Real}=nothing,
+                      weights::Union{Nothing,AbstractVector}=nothing)
+    return wavepacket([state], W;
+                      supports=[support], sigmas=[sigma],
+                      centers=[center], weights=[weights])
+end
+
+function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
+                      supports::AbstractVector=fill(1:W, length(states)),
+                      sigmas::AbstractVector=fill(nothing, length(states)),
+                      centers::AbstractVector=fill(nothing, length(states)),
+                      weights::AbstractVector=fill(nothing, length(states)))
+    n = length(states)
+    n > 0 || throw(ArgumentError("states must be non-empty"))
+    length(supports) == n && length(sigmas) == n &&
+        length(centers) == n && length(weights) == n ||
+        throw(ArgumentError("supports, sigmas, centers, and weights must all have length $(n)"))
+
+    # All wavepackets must share the same background
+    left_gs  = states[1].psi.left_gs
+    right_gs = states[1].psi.right_gs
+    for i in 2:n
+        states[i].psi.left_gs === left_gs && states[i].psi.right_gs === right_gs ||
+            throw(ArgumentError("all states must share the same background MPS"))
+    end
+
+    Uc = length(left_gs)
+    W % Uc == 0 || throw(ArgumentError("Window size W must be a multiple of the unit cell length $(Uc)"))
+
+    # Validate supports: must start on odd sites and end on even sites (unit cell alignment)
+    for (i, sup) in enumerate(supports)
+        first(sup) >= 1 && last(sup) <= W ||
+            throw(ArgumentError("supports[$i] must be contained in 1:$W"))
+        isodd(first(sup)) ||
+            throw(ArgumentError("supports[$i] must begin on an odd site (got $(first(sup)))"))
+        iseven(last(sup)) ||
+            throw(ArgumentError("supports[$i] must end on an even site (got $(last(sup)))"))
+    end
+
+    # Sort supports by starting site, reordering the associated arrays consistently
+    perm     = sortperm(collect(supports), by=first)
+    supports = collect(supports)[perm]
+    states   = collect(states)[perm]
+    sigmas   = collect(sigmas)[perm]
+    centers  = collect(centers)[perm]
+    weights  = collect(weights)[perm]
+
+    # Validate that sorted supports are disjoint with at least 2 sites between them
+    for i in 1:n-1
+        last(supports[i]) + 2 < first(supports[i+1]) ||
+            throw(ArgumentError("supports[$i] and supports[$(i+1)] must have at least 2 sites between them (not yet implemented overlap handling)"))
+    end
+
+    T = storagetype(MPSKit.site_type(left_gs))
+
+    # Build weight dict k => w for QP ℓ
+    function make_ws(ℓ)
+        qp  = states[ℓ].psi
+        p   = qp.momentum
+        sup = supports[ℓ]
+        support_ws = if !isnothing(weights[ℓ])
+            collect(ComplexF64, weights[ℓ])
+        else
+            x0 = isnothing(centers[ℓ]) ? (first(sup) + last(sup)) / 2.0 : Float64(centers[ℓ])
+            σ  = isnothing(sigmas[ℓ])  ? length(sup) / 4.0               : Float64(sigmas[ℓ])
+            [exp(im * p * k) * exp(-(k - x0)^2 / (2σ^2)) for k in sup]
+        end
+        length(support_ws) == length(sup) ||
+            throw(ArgumentError("length(weights[$ℓ]) must equal length(supports[$ℓ])=$(length(sup))"))
+        return Dict(k => support_ws[idx] for (idx, k) in enumerate(sup))
+    end
+
+    # Fuse the auxiliary (excitation) leg of a raw B tensor into the left virtual leg
+    function fuse_B(t, utl)
+        frontmap = isomorphism(T, fuse(utl * MPSKit._firstspace(t)),
+                               utl * MPSKit._firstspace(t))
+        @plansor tt[-1 -2; -3] := t[1 -2; 2 -3] * frontmap[-1; 2 1]
+        return tt
+    end
+
+    # Precompute fused, weighted B tensors for each QP at each site in its support
+    all_Bs = map(1:n) do ℓ
+        qp  = states[ℓ].psi
+        utl = MPSKit.auxiliaryspace(qp)
+        ws  = make_ws(ℓ)
+        Dict(k => fuse_B(ws[k] * qp[mod1(k, Uc)], utl) for k in supports[ℓ])
+    end
+
+    # AL/AR tensors for every window site
+    ALs = [left_gs.AL[mod1(k, Uc)]  for k in 1:W]
+    ARs = [right_gs.AR[mod1(k, Uc)] for k in 1:W]
+
+    # Map each window site to its QP support index (0 = not in any support)
+    site_to_support = zeros(Int, W)
+    for ℓ in 1:n
+        for k in supports[ℓ]
+            site_to_support[k] = ℓ
+        end
+    end
+    last_support_end = maximum(last.(supports))
+
+    # Build the automaton block tensor at site k within support ℓ.
+    #
+    # The automaton has two local states per support:
+    #   state 0 (iso1): "QP not yet inserted" → propagate with AL
+    #   state 1 (iso2): "QP inserted"         → propagate with A_after
+    #                                            (AL if more QPs follow, AR if this is last)
+    #
+    # Tensor shapes (VL = left_virtualspace, VR = right_virtualspace of AL[k]):
+    #   left boundary  (k == first(sup)):  VL        ← Vphys ⊗ (VR ⊕ VR)
+    #   interior sites (i < k < j):        (VL ⊕ VL) ← Vphys ⊗ (VR ⊕ VR)
+    #   right boundary (k == last(sup)):   (VL ⊕ VL) ← Vphys ⊗ VR
+    #
+    # Isometries iso1, iso2 (both VV ← V) select the two halves of the doubled bond.
+    # Following the MPSKit plansor embedding convention:
+    #   left  embed: @plansor M[-1 -2; -3] += iso[-1; 1] * T[1 -2; -3]
+    #   right embed: @plansor M[-1 -2; -3] += T[-1 -2; 1] * conj(iso[-3; 1])
+    function build_automaton_tensor(k, ℓ)
+        AL      = ALs[k]
+        B       = all_Bs[ℓ][k]
+        A_after = (ℓ == n) ? ARs[k] : ALs[k]
+
+        sup          = supports[ℓ]
+        is_left_bdy  = (k == first(sup))
+        is_right_bdy = (k == last(sup))
+
+        VL    = MPSKit.left_virtualspace(AL)
+        VR    = MPSKit.right_virtualspace(AL)
+        VL_dbl = TensorKit.:⊕(VL, VL)
+        VR_dbl = TensorKit.:⊕(VR, VR)
+
+        if is_left_bdy
+            # Left boundary: 1D left bond → 2D right bond
+            # Row vector [AL | B] — state 0 goes to AL, state 1 goes to B
+            iso1_R = isometry(T, VR_dbl, VR)
+            iso2_R = TensorKit.left_null(iso1_R)
+            @plansor M[-1 -2; -3] := AL[-1 -2; 1] * conj(iso1_R[-3; 1])
+            @plansor M[-1 -2; -3] += B[-1 -2; 1] * conj(iso2_R[-3; 1])
+
+        elseif is_right_bdy
+            # Right boundary: 2D left bond → 1D right bond
+            # Column vector [B; A_after] — from state 0 via B, from state 1 via A_after
+            iso1_L = isometry(T, VL_dbl, VL)
+            iso2_L = TensorKit.left_null(iso1_L)
+            @plansor M[-1 -2; -3] := iso1_L[-1; 1] * B[1 -2; -3]
+            @plansor M[-1 -2; -3] += iso2_L[-1; 1] * A_after[1 -2; -3]
+
+        else
+            # Interior: full 2×2 block
+            # [AL       B    ]
+            # [0        A_after]
+            iso1_L = isometry(T, VL_dbl, VL)
+            iso2_L = TensorKit.left_null(iso1_L)
+            iso1_R = isometry(T, VR_dbl, VR)
+            iso2_R = TensorKit.left_null(iso1_R)
+            @plansor M[-1 -2; -3] := iso1_L[-1; 1] * AL[1 -2; 2] * conj(iso1_R[-3; 2])
+            @plansor M[-1 -2; -3] += iso1_L[-1; 1] * B[1 -2; 2] * conj(iso2_R[-3; 2])
+            @plansor M[-1 -2; -3] += iso2_L[-1; 1] * A_after[1 -2; 2] * conj(iso2_R[-3; 2])
+        end
+
+        return M
+    end
+
+    # Assemble all window tensors
+    tensors = map(1:W) do k
+        ℓ = site_to_support[k]
+        if ℓ == 0
+            k > last_support_end ? ARs[k] : ALs[k]
+        else
+            build_automaton_tensor(k, ℓ)
+        end
+    end
+
+    window = FiniteMPS(tensors; normalize=false)
+    return MPSKitState(states[1].hamiltonian, WindowMPS(left_gs, window, right_gs))
 end
 
 # =============================================================================
@@ -262,28 +591,57 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 - `nstates::Int`:: number of states to determine.
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
-    maxiters::Int = 500, bonddim::Int = 100, energy_tol::Real = 1E-8, weight::Real = 100., verbose::Bool = false)
+    maxiters::Int = 500, initiallinkdim::Int = 20, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing} = nothing)
+
+    initiallinkdim = something(bonddim, initiallinkdim)   # `bonddim` is an alias
 
     H = hamiltonian.lempo
-    spaces = get_mpskit_spaces(hamiltonian.lattice)
-    states = Vector{MPSKitState}(undef, nstates)
+    spaces = get_mpskit_spaces(hamiltonian.lattice)   # defect sites are added in the finite branch
+    total_defect = sum(d.charge for d in hamiltonian.defects; init = 0)
+    states = Vector{Union{MPSKitState,MPSKitQPState}}(undef, nstates)
     if isinf(hamiltonian.lattice.N)
-        nstates == 1 || throw(ArgumentError("Only ground state (nstates=1) supported for infinite lattices"))
-        ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => bonddim for q in hamiltonian.lattice.q*(-3:3)]) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
+        ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
+        if abs(hamiltonian.lattice.θ2π[1] - 0.5) < 0.1
+            ψ₀ = attenuateLinks(ψ₀, hamiltonian.lattice.θ2π[1] < 0.5 ? [U1Irrep(0), U1Irrep(0)] : [U1Irrep(-1), U1Irrep(-1)], 0.01)
+        end
         alg = MPSKit.VUMPS(; maxiter=maxiters, tol=energy_tol, verbosity=verbose ? 1 : 0) #TODO: use VUMPSSVDCut once upstream bug fixed
-        ψ, = MPSKit.find_groundstate(ψ₀, H, alg)
+        ψ, envs, _ = MPSKit.find_groundstate(ψ₀, H, alg)
         states[1] = MPSKitState(hamiltonian, ψ)
-        #TODO: QuasiparticleAnsatz for excited states in infinite case
-    else
-        ψ₀ = MPSKit.FiniteMPS(rand, ComplexF64, spaces, U1Space([q => bonddim for q in hamiltonian.lattice.q*(-4:4)]))
-        alg = MPSKit.DMRG(; maxiter=maxiters, verbosity=verbose ? 1 : 0) #TODO: replace with DMRG2 once upstream bug fixed
-        ψ, = MPSKit.find_groundstate(ψ₀, H, alg)
-        states[1] = MPSKitState(hamiltonian, ψ)
+        
         if nstates > 1
-            alg2 = MPSKit.FiniteExcited(alg, weight)
-            _, psis = MPSKit.excitations(H, alg2, (states[1].psi,); num = nstates - 1)
+            isnothing(momentum) && (momentum = 0.0)
+            algqp = MPSKit.QuasiparticleAnsatz()
+            _, psis = MPSKit.excitations(H, algqp, momentum, ψ, envs; num = nstates - 1)
             for n in 2:nstates
-                states[n] = MPSKitState(hamiltonian, psis[n-1])
+                states[n] = MPSKitQPState(hamiltonian, psis[n-1])
+            end
+        end
+    else
+        # With static defects, optimise in the absorbed representation (defect sites fused
+        # into their matter neighbours) so the bond dimension can grow, then split back out.
+        if isempty(hamiltonian.defects)
+            Huse, spc, split = H, collect(spaces), identity
+        else
+            lat = hamiltonian.lattice
+            Huse = _fused_defect_lempo(lat, hamiltonian.defects, hamiltonian.universe)
+            spc = collect(get_mpskit_spaces(lat))
+            for d in hamiltonian.defects
+                idx = (d.link - 1) * lat.F + 1
+                spc[idx] = fuse(U1Space(d.charge => 1) ⊗ spc[idx])
+            end
+            split = ψ -> _split_defect_mps(ψ, lat, hamiltonian.defects)
+        end
+        ψ₀ = MPSKit.FiniteMPS(rand, ComplexF64, spc, U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]); right = U1Space(total_defect => 1))
+        alg = MPSKit.DMRG2(; maxiter=maxiters, tol=energy_tol, trscheme = trunctol(; rtol = cutoff), verbosity=verbose ? 1 : 0)
+        ψ, = MPSKit.find_groundstate(ψ₀, Huse, alg)
+        states[1] = MPSKitState(hamiltonian, split(ψ), hamiltonian.defects)
+
+        if nstates > 1
+            isnothing(momentum) || throw(ArgumentError("Momentum-resolved excitations not supported for finite lattices"))
+            alg2 = MPSKit.FiniteExcited(alg, weight)
+            _, psis = MPSKit.excitations(Huse, alg2, (ψ,); num = nstates - 1)
+            for n in 2:nstates
+                states[n] = MPSKitState(hamiltonian, split(psis[n-1]), hamiltonian.defects)
             end
         end
     end
@@ -310,6 +668,9 @@ Returns the energy difference between the lowest two states of the Hamiltonian.
 - `hamiltonian::SchwingerOperator`: Schwinger model Hamiltonian.
 """
 function energygap(hamiltonian::SchwingerOperator; kwargs...)
+    if isinf(hamiltonian.lattice.N)
+        return energy(loweststates(hamiltonian, 2; kwargs...)[2]) # energy of first QP is the gap
+    end
     return abs(-(map(energy, loweststates(hamiltonian, 2; kwargs...))...))
 end
 
@@ -405,7 +766,7 @@ Apply the operator `op` to the state `state`.
 """
 function act(op::ITensorOperator, state::ITensorState)
     validate_state_operator_compatibility(op, state)
-    return ITensorState(state.hamiltonian, apply(op.mpo, state.psi))
+    return ITensorState(state.hamiltonian, apply(op.mpo, state.psi), state.defects)
 end
 
 function Base.:*(op::ITensorOperator, state::ITensorState)
@@ -423,7 +784,7 @@ Apply the operator `op` to the state `state`.
 """
 function act(op::EDOperator, state::EDState)
     validate_state_operator_compatibility(op, state)
-    return EDState(state.hamiltonian, op.matrix * state.coeffs)
+    return EDState(state.hamiltonian, op.matrix * state.coeffs, state.defects, op.out_charge)
 end
 
 function Base.:*(op::EDOperator, state::EDState)
@@ -441,7 +802,7 @@ Apply the operator `op` to the state `state`.
 """
 function act(op::MPSKitOperator, state::MPSKitState)
     validate_state_operator_compatibility(op, state)
-    return MPSKitState(state.hamiltonian, op.lempo * state.psi)
+    return MPSKitState(state.hamiltonian, op.lempo * state.psi, state.defects)
 end
 
 function Base.:*(op::MPSKitOperator, state::MPSKitState)
@@ -461,6 +822,10 @@ function energy(state::Union{EDState,ITensorState,MPSKitState}; warn::Bool = tru
         @warn "Calculating energy for infinite lattice. Consider using energy_density instead."
     end
     return real(expectation(state.hamiltonian, state))
+end
+
+function energy(state::MPSKitQPState; warn::Bool = true)
+    return real(MPSKitLEMPO.expectation_gap(state.psi, state.hamiltonian.lempo))
 end
 
 """
@@ -540,15 +905,18 @@ Return the expectations of χ†χ operators of each flavor on a given site.
 """
 function occupation(state::MPSKitState, site::Int)
     N, F = state.hamiltonian.lattice.N, state.hamiltonian.lattice.F
-    if isinf(N) && !(1 ≤ site ≤ 2)
+    psi = state.psi
+    if psi isa WindowMPS
+        N_sites = length(psi) ÷ F
+        1 ≤ site ≤ N_sites || throw(ArgumentError("Site must be between 1 and $N_sites"))
+    elseif isinf(N) && !(1 ≤ site ≤ 2)
         return occupation(state, site % 2 == 0 ? 2 : 1)
-    end
-    if isfinite(N) && !(1 ≤ site ≤ Int(N))
+    elseif isfinite(N) && !(1 ≤ site ≤ Int(N))
         throw(ArgumentError("Site must be between 1 and N"))
     end
-    psi = state.psi
-    
-    space = physicalspace(psi, (site - 1) * F + 1)
+
+    lat = state.hamiltonian.lattice
+    space = get_mpskit_spaces(lat)[isodd(site) ? 1 : F + 1]
     occop = zeros(space ← space)
     if isodd(site)
         block(occop, U1Irrep(0)) .= 1.0
@@ -556,10 +924,9 @@ function occupation(state::MPSKitState, site::Int)
         block(occop, U1Irrep(lattice(state).q)) .= 1.0
     end
 
-    # MPSKit expectation values for Sz operator on each flavor at the site
     occs = zeros(F)
     for k in 1:F
-        idx = (site - 1) * F + k
+        idx = _matter_index(lat, state.defects, site, k)   # skip defect sites
         occs[k] = real(MPSKit.expectation_value(psi, idx => occop))
     end
     return occs
@@ -574,22 +941,26 @@ Return an NxF matrix of the expectations of χ†χ operators on each site.
 - `state::MPSKitState`: Schwinger model state.
 """
 function occupations(state::MPSKitState)
-    N, F = state.hamiltonian.lattice.N, state.hamiltonian.lattice.F
-    N = isinf(N) ? 2 : Int(N)
+    lat = state.hamiltonian.lattice
+    defects = state.defects
+    N, F = lat.N, lat.F
     psi = state.psi
+    N = psi isa WindowMPS ? (length(psi) - length(defects)) ÷ F : (isinf(N) ? 2 : Int(N))
     occs = zeros(N, F)
-    
-    oddspace = physicalspace(psi, 1)
-    evenspace = physicalspace(psi, F + 1)
-    occopodd = zeros(oddspace ← oddspace)
-    occopeven = zeros(evenspace ← evenspace)
-    block(occopodd, U1Irrep(0)) .= 1.0
-    block(occopeven, U1Irrep(lattice(state).q)) .= 1.0
+
+    # matter physical spaces (independent of the inserted defect sites)
+    matterspaces = get_mpskit_spaces(lat)
+    occopodd  = zeros(matterspaces[1]   ← matterspaces[1])
+    occopeven = zeros(matterspaces[F+1] ← matterspaces[F+1])
+    block(occopodd,  U1Irrep(0)) .= 1.0
+    block(occopeven, U1Irrep(lat.q)) .= 1.0
+
+    norm2 = real(MPSKit.dot(psi, psi))
 
     for j in 1:N
         for k in 1:F
-            idx = (j - 1) * F + k
-            occs[j, k] = real(MPSKit.expectation_value(psi, idx => (iseven(j) ? occopeven : occopodd)))
+            idx = _matter_index(lat, defects, j, k)   # skip inserted defect sites
+            occs[j, k] = real(MPSKit.contract_mpo_expval1(psi.AC[idx], (iseven(j) ? occopeven : occopodd), psi.AC[idx]))/norm2
         end
     end
     return occs
@@ -636,7 +1007,7 @@ function occupation(state::EDState, site::Int)
     if !(1 ≤ site ≤ state.hamiltonian.lattice.N)
         throw(ArgumentError("Site must be between 1 and N"))
     end
-    states = schwingerbasis(state.hamiltonian.lattice; L_max = state.hamiltonian.L_max)
+    states = _edbasis(state)
     occs = zeros(F)
     for (coeff, state) in zip(state.coeffs, states)
         occs .+= real(abs2(coeff)) .* occupations(state)[site]
@@ -654,7 +1025,7 @@ Return an NxF matrix of the expectations of χ†χ operators on each site.
 """
 function occupations(state::EDState)
     N, F = Int(state.hamiltonian.lattice.N), state.hamiltonian.lattice.F
-    states = schwingerbasis(state.hamiltonian.lattice; L_max = state.hamiltonian.L_max)
+    states = _edbasis(state)
     occs = zeros(N,F)
     for (coeff, state) in zip(state.coeffs, states)
         occs .+= real(abs2(coeff)) .* occupations(state)
@@ -737,12 +1108,12 @@ function pseudoscalardensity(state::EDState, site::Int)
     end
     before = site == 1 ? N : site - 1
     function p(n)
-        return real(expectation(EDHoppingMass(lattice(state), n; bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe), state))
+        return real(expectation(EDHoppingMass(lattice(state), n; bare = true, L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe, charge = state.net_charge), state))
     end
     return 1/(lattice(state).a)*(p(site)/2 + p(before)/2)
 end
 
-function pseudoscalardensity(::BasisState, ::Int) 
+function pseudoscalardensity(::BasisState, ::Int)
     return 0
 end
 
@@ -793,9 +1164,10 @@ Return a list of the expectations of Q operators on each site.
 - `state::SchwingerState`: Schwinger model state.
 """
 function charges(state::SchwingerState)
-    N = isinf(lattice(state).N) ? 2 : Int(lattice(state).N)
-    F = lattice(state).F
-    return (sum(occupations(state), dims=2) + (F .* [-1/2 + (-1)^(n)/2 for n=1:N])) .* lattice(state).q
+    F    = lattice(state).F
+    occs = occupations(state)
+    N    = size(occs, 1)
+    return (sum(occs, dims=2) + (F .* [-1/2 + (-1)^(n)/2 for n=1:N])) .* lattice(state).q
 end
 
 """
@@ -829,7 +1201,7 @@ function L₀(state::ITensorState)
 end
 
 function L₀(state::EDState)
-    states = schwingerbasis(lattice(state); L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
+    states = _edbasis(state)
     return sum(abs2(coeff) * L₀(state) for (coeff, state) in zip(state.coeffs, states))
 end
 
@@ -870,7 +1242,16 @@ function electricfields(state::SchwingerState)
     Qs = charges(state)
 
     N = isinf(lattice(state).N) ? 2 : Int(lattice(state).N)
-    return accumulate(+, Qs) .+ L₀(state) .+ Base.convert(Vector{Float64},  lat.θ2π[1:N])
+    efs = accumulate(+, Qs) .+ L₀(state) .+ Base.convert(Vector{Float64}, lat.θ2π[1:N])
+    # static defect charges are not in the (unaltered) lattice θ2π nor in `charges`;
+    # add their flux contribution so the reported field on the real links is physical.
+    # Uniform across backends (ED/ITensors keep the original lattice; MPSKit hides its
+    # extra site), since `defects(state)` is the same regardless of representation.
+    ds = defects(state)
+    if !isempty(ds)
+        efs = efs .+ _defect_theta_shift(lat, ds)
+    end
+    return efs
 end
 
 function partialcode(state::BasisState, range::UnitRange{Int})
@@ -898,7 +1279,7 @@ Return the von Neumann entanglement entropy -tr(ρₐ log(ρₐ)), where a is th
 """
 function entanglement(state::EDState, bisection::Int)
     N = Int(lattice(state).N)
-    basis = schwingerbasis(lattice(state); L_max = state.hamiltonian.L_max)
+    basis = _edbasis(state)
     range1 = bisection ≤ N/2 ? (1:bisection) : (bisection+1:N)
     range2 = bisection ≤ N/2 ? (bisection+1:N) : (1:bisection)
     codes = partialcode.(basis, Ref(range1)) # don't broadcast range1

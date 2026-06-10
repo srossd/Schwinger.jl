@@ -13,6 +13,14 @@ using Test
     @testset "Mass gap" begin
         include("massgap.jl")
     end
+
+    @testset "Defect charges" begin
+        include("defects.jl")
+    end
+
+    @testset "Fermion field" begin
+        include("fermionfield.jl")
+    end
 end
 
 @testset "Time evolution tests" begin

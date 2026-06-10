@@ -49,17 +49,28 @@ function get_sites(hamiltonian::ITensorOperator)
     return get_sites(hamiltonian.lattice; L_max = hamiltonian.L_max)
 end
 
-function constructoperator(lattice::Lattice, action::Function; L_max::Union{Nothing,Int} = nothing, universe::Int = 0) 
+function constructoperator(lattice::Lattice, action::Function; L_max::Union{Nothing,Int} = nothing,
+                           universe::Int = 0, in_charge::Int = 0, out_charge::Int = 0)
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
 
-    states = schwingerbasis(lattice; L_max = L_max, universe = universe)
-    positions = positionindex(lattice; L_max = L_max, universe = universe)
+    # A charge-changing operator (in_charge ≠ out_charge) maps the basis at one matter
+    # filling (the domain) to the basis at another (the codomain). Acting such an operator
+    # on a *non-vacuum* sector (in_charge ≠ 0) is well defined in principle but not yet
+    # wired up — for now only charge-changing-from-vacuum is supported.
+    if in_charge != out_charge && in_charge != 0
+        throw(ArgumentError("charge-changing operators acting on a non-vacuum sector " *
+                            "(in_charge = $in_charge ≠ 0) are not yet implemented"))
+    end
+
+    domain = schwingerbasis(lattice; L_max = L_max, universe = universe, net_charge = in_charge)
+    positions = positionindex(lattice; L_max = L_max, universe = universe, net_charge = out_charge)
+    nrows = length(schwingerbasis(lattice; L_max = L_max, universe = universe, net_charge = out_charge))
 
     I = Vector{Int}()
     J = Vector{Int}()
     V = Vector{ComplexF64}()
-    for i in eachindex(states)
-        for (key, val) in action(states[i])
+    for i in eachindex(domain)
+        for (key, val) in action(domain[i])
             if haskey(positions,key)
                 push!(I, positions[key])
                 push!(J, i)
@@ -68,8 +79,8 @@ function constructoperator(lattice::Lattice, action::Function; L_max::Union{Noth
         end
     end
 
-    matrix = sparse(I, J, V, length(states), length(states))
-    return EDOperator(lattice, matrix, L_max, universe)
+    matrix = sparse(I, J, V, nrows, length(domain))
+    return EDOperator(lattice, matrix, L_max, universe, in_charge, out_charge)
 end
 
 function process_L_max_universe(lattice::Lattice, L_max::Union{Nothing,Int}, universe::Int)

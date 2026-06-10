@@ -191,6 +191,25 @@ WilsonLine(lattice::Lattice, conjugate::Bool, flavor::Int, start, finish, ::MPSK
     MPSKitWilsonLine(lattice, conjugate, flavor, start, finish; kwargs...)
 
 # =============================================================================
+# FermionField
+# =============================================================================
+
+"""
+    FermionField(lattice, site; backend=nothing, dagger=false, flavor=1)
+
+Construct the single staggered-fermion field with a Jordan-Wigner string to its left.
+Unlike `WilsonLine`, this changes the total fermion number.
+"""
+function FermionField(lattice::Lattice, site::Int; backend::Union{Symbol,Backend,Nothing}=nothing, kwargs...)
+    backend = isnothing(backend) ? get_default_backend() : resolve_backend(backend)
+    return FermionField(lattice, site, backend; kwargs...)
+end
+
+FermionField(lattice::Lattice, site::Int, ::EDBackend; kwargs...) = EDFermionField(lattice, site; kwargs...)
+FermionField(lattice::Lattice, site::Int, ::ITensorsBackend; kwargs...) = ITensorFermionField(lattice, site; kwargs...)
+FermionField(lattice::Lattice, site::Int, ::MPSKitBackend; kwargs...) = MPSKitFermionField(lattice, site; kwargs...)
+
+# =============================================================================
 # AverageElectricField
 # =============================================================================
 
