@@ -21,6 +21,10 @@ using Test
     @testset "Fermion field" begin
         include("fermionfield.jl")
     end
+
+    @testset "Zero-length Wilson line" begin
+        include("wilson_line.jl")
+    end
 end
 
 @testset "Time evolution tests" begin

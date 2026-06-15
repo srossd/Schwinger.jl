@@ -72,7 +72,9 @@ function ITensorWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::In
 
     ind1 = F*(start-1) + flavor
     ind2 = F*(finish-1) + flavor
-    if conjugate
+    if start == finish
+        line += 1,"S+",ind1,"S-",ind1          # zero-length line = number operator χ†ₙχₙ
+    elseif conjugate
         line += 1,"S-",ind1,"S+",ind2
     else
         line += 1,"S+",ind1,"S-",ind2
@@ -108,6 +110,14 @@ function EDWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int = 1
     end
 
     L_max = isnothing(L_max) ? (lattice.periodic ? 3 : 0) : L_max
+
+    if start == finish
+        function numop(state::BasisState)      # zero-length line = number operator χ†ₙχₙ
+            occs = occupations(state)
+            return occs[start, flavor] == 1 ? [(copy(occs), L₀(state)) => 1] : []
+        end
+        return constructoperator(lattice, numop; L_max = L_max, universe = universe)
+    end
 
     function actW(state::BasisState)
         occs = copy(occupations(state))
@@ -165,6 +175,22 @@ function MPSKitWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int
     finish_ind = F*(finish-1) + flavor
 
     spaces = get_mpskit_spaces(lattice)
+
+    if start_ind == finish_ind
+        # zero-length line = number operator χ†ₙχₙ: an on-site, charge-conserving MPO.
+        numop(P) = begin
+            T = zeros(ComplexF64, U1Space(0 => 1) ⊗ P ← P ⊗ U1Space(0 => 1))
+            for (i, c) in enumerate(sort(collect(sectors(P)); by = c -> c.charge))
+                block(T, c) .= (i == 2 ? 1.0 : 0.0)   # occupied → 1, empty → 0
+            end
+            T
+        end
+        idop(P) = isomorphism(ComplexF64, U1Space(0 => 1) ⊗ P, P ⊗ U1Space(0 => 1))
+        MPOT = typeof(idop(spaces[1]))
+        ts = MPOT[k == start_ind ? numop(spaces[k]) : idop(spaces[k]) for k in 1:N*F]
+        return MPSKitOperator(lattice, FiniteMPO(ts), universe)
+    end
+
     start_space = spaces[start_ind]
     finish_space = spaces[finish_ind]
 
