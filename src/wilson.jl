@@ -72,12 +72,15 @@ function ITensorWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::In
 
     ind1 = F*(start-1) + flavor
     ind2 = F*(finish-1) + flavor
+    # The real-hopping S± operators differ from ED's imaginary-hopping gauge by the
+    # factor i^(finish-start); apply it so every backend shares ED's convention.
+    phase = im^(finish - start)
     if start == finish
         line += 1,"S+",ind1,"S-",ind1          # zero-length line = number operator χ†ₙχₙ
     elseif conjugate
-        line += 1,"S-",ind1,"S+",ind2
+        line += conj(phase),"S-",ind1,"S+",ind2
     else
-        line += 1,"S+",ind1,"S-",ind2
+        line += phase,"S+",ind1,"S-",ind2
     end
 
     mpo = ITensorMPS.MPO(line, get_sites(lattice; L_max=L_max))
@@ -228,8 +231,12 @@ function MPSKitWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int
         A[end][2,1] = convert(TensorMap, BraidingTensor(spaces[end], U1Space(0 => 1)))
     end
 
+    # The real-hopping S± operators differ from ED's imaginary-hopping gauge by the
+    # overall factor i^(finish-start) (conjugated for the conjugate line); apply it so
+    # every backend shares ED's convention.
+    phase = conjugate ? conj(im^(finish - start)) : im^(finish - start)
     mpo = FiniteMPOHamiltonian(A)
-    return MPSKitOperator(lattice, mpo, universe)
+    return MPSKitOperator(lattice, phase * mpo, universe)
 end
 # =============================================================================
 # Single staggered-fermion field  φ̃_s = ∏_{k<s}(±iσ^z_k) σ∓_s   (MPSKit)
