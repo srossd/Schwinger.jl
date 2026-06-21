@@ -191,11 +191,14 @@ struct MPSKitState <: SchwingerState
 
     function MPSKitState(hamiltonian::MPSKitOperator, psi::MPSKit.AbstractMPS,
                          defects::Vector{DefectCharge} = hamiltonian.defects)
-        if psi isa WindowMPS
+        if psi isa InfiniteMPS
+            isinf(hamiltonian.lattice) || throw(ArgumentError("Hamiltonian and state must both be finite or infinite"))
+        elseif psi isa WindowMPS
             isinf(hamiltonian.lattice) || throw(ArgumentError("WindowMPS requires an infinite-lattice Hamiltonian"))
-        else
-            isinf(hamiltonian.lattice) == (psi isa InfiniteMPS) || throw(ArgumentError("Hamiltonian and state must both be finite or infinite"))
-            (psi isa InfiniteMPS) || (length(psi) == Int(hamiltonian.lattice.N) * hamiltonian.lattice.F + length(defects)) || throw(ArgumentError("State length does not match Hamiltonian lattice size"))
+        else  # FiniteMPS: a finite lattice, or a finite window on an infinite background
+            isinf(hamiltonian.lattice) ||
+                length(psi) == Int(hamiltonian.lattice.N) * hamiltonian.lattice.F + length(defects) ||
+                throw(ArgumentError("State length does not match Hamiltonian lattice size"))
         end
         new(hamiltonian, psi, defects)
     end
@@ -204,6 +207,11 @@ end
 function lattice(state::MPSKitState)
     return state.hamiltonian.lattice
 end
+
+# A finite window on an infinite background — either a `WindowMPS`, or a bare `FiniteMPS`
+# paired with an infinite-lattice Hamiltonian (the two `wavepacket` representations). Such
+# states are indexed over their actual length rather than the (infinite) unit cell.
+_isfinitewindow(state::MPSKitState) = isinf(lattice(state).N) && !(state.psi isa MPSKit.InfiniteMPS)
 
 """
 `defects(x)`
@@ -308,207 +316,6 @@ end
 
 function Base.:*(state::MPSKitQPState, scalar::Number)
     return scalar * state
-end
-
-"""
-    wavepacket(state::MPSKitQPState, W::Int; support=1:W, weights=nothing)
-
-Build a wavepacket `MPSKitState` from an infinite quasiparticle state.
-
-The total window has `W` sites. The B tensor is summed only over the sites in
-`support` (a `UnitRange`, default `1:W`), so sites outside `support` are pure
-ground state. This lets you build a spatially localized wavepacket inside a
-larger window — e.g. `W=100, support=10:20`.
-
-`weights` gives one complex amplitude per site in `support`. If `nothing`, the
-default is `exp(im·p·k)` for each site k ∈ support (the QP momentum phase),
-giving a position-space truncation of a momentum eigenstate.
-
-The result is an `MPSKitState` wrapping a `WindowMPS` whose left/right environments
-are the QP's `left_gs`/`right_gs`. The construction follows MPSKit's
-`convert(FiniteMPS, v::QP{FiniteMPS})`, adapted for the infinite case.
-
-!!! note
-    Assumes a non-topological excitation (trivial auxiliary sector).
-"""
-function wavepacket(state::MPSKitQPState, W::Int;
-                      support::UnitRange{Int}=1:W,
-                      sigma::Union{Nothing,Real}=nothing,
-                      center::Union{Nothing,Real}=nothing,
-                      weights::Union{Nothing,AbstractVector}=nothing)
-    return wavepacket([state], W;
-                      supports=[support], sigmas=[sigma],
-                      centers=[center], weights=[weights])
-end
-
-function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
-                      supports::AbstractVector=fill(1:W, length(states)),
-                      sigmas::AbstractVector=fill(nothing, length(states)),
-                      centers::AbstractVector=fill(nothing, length(states)),
-                      weights::AbstractVector=fill(nothing, length(states)))
-    n = length(states)
-    n > 0 || throw(ArgumentError("states must be non-empty"))
-    length(supports) == n && length(sigmas) == n &&
-        length(centers) == n && length(weights) == n ||
-        throw(ArgumentError("supports, sigmas, centers, and weights must all have length $(n)"))
-
-    # All wavepackets must share the same background
-    left_gs  = states[1].psi.left_gs
-    right_gs = states[1].psi.right_gs
-    for i in 2:n
-        states[i].psi.left_gs === left_gs && states[i].psi.right_gs === right_gs ||
-            throw(ArgumentError("all states must share the same background MPS"))
-    end
-
-    Uc = length(left_gs)
-    W % Uc == 0 || throw(ArgumentError("Window size W must be a multiple of the unit cell length $(Uc)"))
-
-    # Validate supports: must start on odd sites and end on even sites (unit cell alignment)
-    for (i, sup) in enumerate(supports)
-        first(sup) >= 1 && last(sup) <= W ||
-            throw(ArgumentError("supports[$i] must be contained in 1:$W"))
-        isodd(first(sup)) ||
-            throw(ArgumentError("supports[$i] must begin on an odd site (got $(first(sup)))"))
-        iseven(last(sup)) ||
-            throw(ArgumentError("supports[$i] must end on an even site (got $(last(sup)))"))
-    end
-
-    # Sort supports by starting site, reordering the associated arrays consistently
-    perm     = sortperm(collect(supports), by=first)
-    supports = collect(supports)[perm]
-    states   = collect(states)[perm]
-    sigmas   = collect(sigmas)[perm]
-    centers  = collect(centers)[perm]
-    weights  = collect(weights)[perm]
-
-    # Validate that sorted supports are disjoint with at least 2 sites between them
-    for i in 1:n-1
-        last(supports[i]) + 2 < first(supports[i+1]) ||
-            throw(ArgumentError("supports[$i] and supports[$(i+1)] must have at least 2 sites between them (not yet implemented overlap handling)"))
-    end
-
-    T = storagetype(MPSKit.site_type(left_gs))
-
-    # Build weight dict k => w for QP ℓ
-    function make_ws(ℓ)
-        qp  = states[ℓ].psi
-        p   = qp.momentum
-        sup = supports[ℓ]
-        support_ws = if !isnothing(weights[ℓ])
-            collect(ComplexF64, weights[ℓ])
-        else
-            x0 = isnothing(centers[ℓ]) ? (first(sup) + last(sup)) / 2.0 : Float64(centers[ℓ])
-            σ  = isnothing(sigmas[ℓ])  ? length(sup) / 4.0               : Float64(sigmas[ℓ])
-            [exp(im * p * k) * exp(-(k - x0)^2 / (2σ^2)) for k in sup]
-        end
-        length(support_ws) == length(sup) ||
-            throw(ArgumentError("length(weights[$ℓ]) must equal length(supports[$ℓ])=$(length(sup))"))
-        return Dict(k => support_ws[idx] for (idx, k) in enumerate(sup))
-    end
-
-    # Fuse the auxiliary (excitation) leg of a raw B tensor into the left virtual leg
-    function fuse_B(t, utl)
-        frontmap = isomorphism(T, fuse(utl * MPSKit._firstspace(t)),
-                               utl * MPSKit._firstspace(t))
-        @plansor tt[-1 -2; -3] := t[1 -2; 2 -3] * frontmap[-1; 2 1]
-        return tt
-    end
-
-    # Precompute fused, weighted B tensors for each QP at each site in its support
-    all_Bs = map(1:n) do ℓ
-        qp  = states[ℓ].psi
-        utl = MPSKit.auxiliaryspace(qp)
-        ws  = make_ws(ℓ)
-        Dict(k => fuse_B(ws[k] * qp[mod1(k, Uc)], utl) for k in supports[ℓ])
-    end
-
-    # AL/AR tensors for every window site
-    ALs = [left_gs.AL[mod1(k, Uc)]  for k in 1:W]
-    ARs = [right_gs.AR[mod1(k, Uc)] for k in 1:W]
-
-    # Map each window site to its QP support index (0 = not in any support)
-    site_to_support = zeros(Int, W)
-    for ℓ in 1:n
-        for k in supports[ℓ]
-            site_to_support[k] = ℓ
-        end
-    end
-    last_support_end = maximum(last.(supports))
-
-    # Build the automaton block tensor at site k within support ℓ.
-    #
-    # The automaton has two local states per support:
-    #   state 0 (iso1): "QP not yet inserted" → propagate with AL
-    #   state 1 (iso2): "QP inserted"         → propagate with A_after
-    #                                            (AL if more QPs follow, AR if this is last)
-    #
-    # Tensor shapes (VL = left_virtualspace, VR = right_virtualspace of AL[k]):
-    #   left boundary  (k == first(sup)):  VL        ← Vphys ⊗ (VR ⊕ VR)
-    #   interior sites (i < k < j):        (VL ⊕ VL) ← Vphys ⊗ (VR ⊕ VR)
-    #   right boundary (k == last(sup)):   (VL ⊕ VL) ← Vphys ⊗ VR
-    #
-    # Isometries iso1, iso2 (both VV ← V) select the two halves of the doubled bond.
-    # Following the MPSKit plansor embedding convention:
-    #   left  embed: @plansor M[-1 -2; -3] += iso[-1; 1] * T[1 -2; -3]
-    #   right embed: @plansor M[-1 -2; -3] += T[-1 -2; 1] * conj(iso[-3; 1])
-    function build_automaton_tensor(k, ℓ)
-        AL      = ALs[k]
-        B       = all_Bs[ℓ][k]
-        A_after = (ℓ == n) ? ARs[k] : ALs[k]
-
-        sup          = supports[ℓ]
-        is_left_bdy  = (k == first(sup))
-        is_right_bdy = (k == last(sup))
-
-        VL    = MPSKit.left_virtualspace(AL)
-        VR    = MPSKit.right_virtualspace(AL)
-        VL_dbl = TensorKit.:⊕(VL, VL)
-        VR_dbl = TensorKit.:⊕(VR, VR)
-
-        if is_left_bdy
-            # Left boundary: 1D left bond → 2D right bond
-            # Row vector [AL | B] — state 0 goes to AL, state 1 goes to B
-            iso1_R = isometry(T, VR_dbl, VR)
-            iso2_R = TensorKit.left_null(iso1_R)
-            @plansor M[-1 -2; -3] := AL[-1 -2; 1] * conj(iso1_R[-3; 1])
-            @plansor M[-1 -2; -3] += B[-1 -2; 1] * conj(iso2_R[-3; 1])
-
-        elseif is_right_bdy
-            # Right boundary: 2D left bond → 1D right bond
-            # Column vector [B; A_after] — from state 0 via B, from state 1 via A_after
-            iso1_L = isometry(T, VL_dbl, VL)
-            iso2_L = TensorKit.left_null(iso1_L)
-            @plansor M[-1 -2; -3] := iso1_L[-1; 1] * B[1 -2; -3]
-            @plansor M[-1 -2; -3] += iso2_L[-1; 1] * A_after[1 -2; -3]
-
-        else
-            # Interior: full 2×2 block
-            # [AL       B    ]
-            # [0        A_after]
-            iso1_L = isometry(T, VL_dbl, VL)
-            iso2_L = TensorKit.left_null(iso1_L)
-            iso1_R = isometry(T, VR_dbl, VR)
-            iso2_R = TensorKit.left_null(iso1_R)
-            @plansor M[-1 -2; -3] := iso1_L[-1; 1] * AL[1 -2; 2] * conj(iso1_R[-3; 2])
-            @plansor M[-1 -2; -3] += iso1_L[-1; 1] * B[1 -2; 2] * conj(iso2_R[-3; 2])
-            @plansor M[-1 -2; -3] += iso2_L[-1; 1] * A_after[1 -2; 2] * conj(iso2_R[-3; 2])
-        end
-
-        return M
-    end
-
-    # Assemble all window tensors
-    tensors = map(1:W) do k
-        ℓ = site_to_support[k]
-        if ℓ == 0
-            k > last_support_end ? ARs[k] : ALs[k]
-        else
-            build_automaton_tensor(k, ℓ)
-        end
-    end
-
-    window = FiniteMPS(tensors; normalize=false)
-    return MPSKitState(states[1].hamiltonian, WindowMPS(left_gs, window, right_gs))
 end
 
 # =============================================================================
@@ -906,7 +713,7 @@ Return the expectations of χ†χ operators of each flavor on a given site.
 function occupation(state::MPSKitState, site::Int)
     N, F = state.hamiltonian.lattice.N, state.hamiltonian.lattice.F
     psi = state.psi
-    if psi isa WindowMPS
+    if _isfinitewindow(state)
         N_sites = length(psi) ÷ F
         1 ≤ site ≤ N_sites || throw(ArgumentError("Site must be between 1 and $N_sites"))
     elseif isinf(N) && !(1 ≤ site ≤ 2)
@@ -945,7 +752,7 @@ function occupations(state::MPSKitState)
     defects = state.defects
     N, F = lat.N, lat.F
     psi = state.psi
-    N = psi isa WindowMPS ? (length(psi) - length(defects)) ÷ F : (isinf(N) ? 2 : Int(N))
+    N = _isfinitewindow(state) ? (length(psi) - length(defects)) ÷ F : (isinf(N) ? 2 : Int(N))
     occs = zeros(N, F)
 
     # matter physical spaces (independent of the inserted defect sites)

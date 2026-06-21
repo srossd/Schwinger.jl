@@ -33,7 +33,7 @@ export EDAverageElectricField, ITensorAverageElectricField, MPSKitAverageElectri
 # State operations
 export lattice
 export loweststates, groundstate, energygap
-export wavepacket
+export wavepacket, reflection_symmetric_gauge
 export expectation, act
 export evolve
 
@@ -77,6 +77,7 @@ include("./operators.jl")
 include("./utility.jl")
 include("./states.jl")
 include("./hamiltonian.jl")
+include("./wavepacket.jl")
 include("./wilson.jl")
 include("./average_electric_field.jl")
 include("./timeevolution.jl")

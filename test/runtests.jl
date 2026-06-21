@@ -41,4 +41,8 @@ end
     @testset "Ground state" begin
         include("infinite_groundstate.jl")
     end
+
+    @testset "Reflection-symmetric QP gauge" begin
+        include("wavepacket_gauge.jl")
+    end
 end
