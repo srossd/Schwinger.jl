@@ -20,7 +20,8 @@ Evolve an exact diagonalization state by time `t` using matrix exponentiation.
 evolved_state, obs = evolve(state, 1.0; nsteps=10, observable=s->energy(s))
 ```
 """
-function evolve(state::EDState, t::Real; nsteps::Int = 1, tol = 1E-12, observable::Union{Nothing,Function,Dict} = nothing) 
+function evolve(state::EDState, t::Real; nsteps::Int = 1, tol = 1E-12, observable::Union{Nothing,Function,Dict} = nothing,
+                checkpoint::Union{Nothing,Function} = nothing, checkpoint_every::Int = 1)
     H = state.hamiltonian.matrix
     ψ = copy(state.coeffs)
 
@@ -45,6 +46,9 @@ function evolve(state::EDState, t::Real; nsteps::Int = 1, tol = 1E-12, observabl
     for (i, tnow) in enumerate(t/nsteps .* (1:nsteps))
         ψ = exponentiate(H, -1im*t/nsteps, ψ; ishermitian = true, tol = tol/nsteps)[1]
         Observers.update!(obs; step = i, current_time = tnow, state = ψ)
+        if !isnothing(checkpoint) && i % checkpoint_every == 0
+            checkpoint(EDState(state.hamiltonian, ψ, state.defects, state.net_charge), tnow, i, obs)
+        end
     end
 
     return EDState(state.hamiltonian, ψ, state.defects, state.net_charge), obs
@@ -75,7 +79,8 @@ Evolve an ITensor MPS state by imaginary time `t` using TDVP.
 """
 function evolve(state::ITensorState, t::Real; nsteps::Int = 1,
                 maxlinkdim::Union{Nothing,Int} = nothing,
-                observable::Union{Nothing,Function,Dict} = nothing, kwargs...)
+                observable::Union{Nothing,Function,Dict} = nothing,
+                checkpoint::Union{Nothing,Function} = nothing, checkpoint_every::Int = 1, kwargs...)
     H = state.hamiltonian.mpo
 
     step(; sweep) = sweep
@@ -92,9 +97,24 @@ function evolve(state::ITensorState, t::Real; nsteps::Int = 1,
         observables[name] = (; kwargs...) -> obs_fn(ITensorState(state.hamiltonian, kwargs[:state], state.defects), kwargs[:current_time]/(-1im))
     end
 
+    # tdvp runs its sweeps internally, so checkpointing hooks the per-sweep step observer.
+    # `obsref` lets the closure see the observer (built just below) at call time.
+    obsref = Ref{Any}(nothing)
+    if !isnothing(checkpoint)
+        observables["_checkpoint"] = (; kwargs...) -> begin
+            sw = kwargs[:sweep]
+            if sw % checkpoint_every == 0
+                checkpoint(ITensorState(state.hamiltonian, kwargs[:state], state.defects),
+                           real(kwargs[:current_time]/(-1im)), sw, obsref[])
+            end
+            return sw
+        end
+    end
+
     obs = Observers.observer(
         merge(Dict("step" => step, "time" => current_time), observables)...
     )
+    obsref[] = obs
 
     maxdim_kw = isnothing(maxlinkdim) ? (;) : (; maxdim = maxlinkdim)
     ψ0 = state.psi
@@ -126,6 +146,11 @@ Evolve an MPSKit MPS state by real time `t` using MPSKit's TDVP algorithm.
   `two_site = true`.
 - `observable::Union{Nothing,Function,Dict} = nothing`: Observable(s) to monitor.
   A single function `(state, t) -> value`, or a dictionary of name => function.
+- `checkpoint::Union{Nothing,Function} = nothing`: if given, called as
+  `checkpoint(state, current_time, step, observer)` every `checkpoint_every` steps. The
+  `observer` carries the full history accumulated so far, so a single (overwritten) file can
+  hold both the latest wavefunction and the whole trajectory for resuming/inspection.
+- `checkpoint_every::Int = 1`: how often (in steps) to invoke `checkpoint`.
 - `kwargs...`: Additional keyword arguments forwarded to `MPSKit.timestep`.
 
 # Returns
@@ -134,7 +159,8 @@ Evolve an MPSKit MPS state by real time `t` using MPSKit's TDVP algorithm.
 """
 function evolve(state::MPSKitState, t::Real; nsteps::Int = 1, two_site::Bool = false,
                 maxlinkdim::Union{Nothing,Int} = nothing, trscheme = nothing,
-                observable::Union{Nothing,Function,Dict} = nothing, kwargs...)
+                observable::Union{Nothing,Function,Dict} = nothing,
+                checkpoint::Union{Nothing,Function} = nothing, checkpoint_every::Int = 1, kwargs...)
     # With static defects, evolve in the absorbed representation (defect sites fused into
     # their matter neighbours) so the bond dimension can grow, then split them back out.
     if !isempty(state.defects)
@@ -142,9 +168,14 @@ function evolve(state::MPSKitState, t::Real; nsteps::Int = 1, two_site::Bool = f
         fop = MPSKitOperator(lat, _fused_defect_lempo(lat, state.defects, state.hamiltonian.universe),
                              state.hamiltonian.universe, DefectCharge[])
         fstate = MPSKitState(fop, _fuse_defect_mps(state.psi, lat, state.defects), DefectCharge[])
+        # rewrap the checkpoint so the user always sees the split (physical) representation
+        cp = isnothing(checkpoint) ? nothing :
+             (fs, tnow, i, obs) -> checkpoint(MPSKitState(state.hamiltonian,
+                                  _split_defect_mps(fs.psi, lat, state.defects), state.defects), tnow, i, obs)
         fevolved, obs = evolve(fstate, t; nsteps = nsteps, two_site = two_site,
                                maxlinkdim = maxlinkdim, trscheme = trscheme,
-                               observable = observable, kwargs...)
+                               observable = observable, checkpoint = cp,
+                               checkpoint_every = checkpoint_every, kwargs...)
         return MPSKitState(state.hamiltonian, _split_defect_mps(fevolved.psi, lat, state.defects),
                            state.defects), obs
     end
@@ -187,6 +218,9 @@ function evolve(state::MPSKitState, t::Real; nsteps::Int = 1, two_site::Bool = f
         @info "TDVP step $i / $nsteps (t = $tnow / $t)"
         ψ = MPSKit.timestep(ψ, H, tnow, t/nsteps, alg; kwargs...)[1]
         Observers.update!(obs; step = i, current_time = tnow, state = ψ)
+        if !isnothing(checkpoint) && i % checkpoint_every == 0
+            checkpoint(MPSKitState(state.hamiltonian, ψ, state.defects), tnow, i, obs)
+        end
     end
 
     return MPSKitState(state.hamiltonian, ψ, state.defects), obs

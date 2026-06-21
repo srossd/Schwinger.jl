@@ -39,6 +39,10 @@ end
     @testset "Wilson loop correlator" begin
         include("wilson_correlator.jl")
     end
+
+    @testset "Evolve checkpoint hook" begin
+        include("evolve_checkpoint.jl")
+    end
 end
 
 @testset "Infinite lattice tests" begin
