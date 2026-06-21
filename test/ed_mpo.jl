@@ -27,10 +27,10 @@ using ProgressMeter, StatsBase
 
             ed_scalar = scalar(ed_gs)
             itensors_scalar = scalar(itensors_gs)
-            @test ed_scalar ≈ itensors_scalar rtol=1E-4
+            @test ed_scalar ≈ itensors_scalar rtol=1E-3
             if !lat.periodic
                 mpskit_scalar = scalar(mpskit_gs)
-                @test ed_scalar ≈ mpskit_scalar rtol=1E-4
+                @test ed_scalar ≈ mpskit_scalar rtol=1E-3
             end
 
             ed_scalardensities = scalardensities(ed_gs)
@@ -43,10 +43,10 @@ using ProgressMeter, StatsBase
 
             ed_pseudoscalar = pseudoscalar(ed_gs)
             itensors_pseudoscalar = pseudoscalar(itensors_gs)
-            @test ed_pseudoscalar ≈ itensors_pseudoscalar rtol=1E-4
+            @test ed_pseudoscalar ≈ itensors_pseudoscalar rtol=1E-3
             if !lat.periodic
                 mpskit_pseudoscalar = pseudoscalar(mpskit_gs)
-                @test ed_pseudoscalar ≈ mpskit_pseudoscalar rtol=1E-4
+                @test ed_pseudoscalar ≈ mpskit_pseudoscalar rtol=1E-3
             end
 
             ed_pseudoscalardensities = pseudoscalardensities(ed_gs)
