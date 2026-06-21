@@ -9,14 +9,19 @@ Computes the mass operator ∑ (-1)ⁿ χ†ₙχₙ for the Schwinger model.
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
-    N, F = Int(lattice.N), lattice.F
+@memoize function EDMass(lattice::Lattice, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
+    F = lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function massenergy(state::BasisState)
         occs = occupations(state)
-        return [(occs, L₀(state)) => sum((-1)^(j) * (bare ? 1 : state.lattice.mlat[j][k]) * occs[j,k] for j=1:N, k=1:F)]
+        return [(occs, L₀(state)) => sum((-1)^(site) * (bare ? 1 : state.lattice.mlat[site][k]) * occs[site,k] for k=1:F)]
     end
     return constructoperator(lattice, massenergy; L_max = L_max, universe = universe, in_charge = charge, out_charge = charge)
+end
+
+@memoize function EDMass(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    return sum(EDMass.(Ref(lattice), 1:Int(lattice.N); L_max = L_max, universe = universe, bare = bare, charge = charge))
 end
 
 """
@@ -26,13 +31,17 @@ Computes the gauge kinetic operator ∑(Lₙ+θ/2π)² for the Schwinger model.
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDGaugeKinetic(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
+@memoize function EDGaugeKinetic(lattice::Lattice, link::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function electricenergy(state::BasisState)
-        efs = electricfields(state)
-        return [(occupations(state), L₀(state)) => (bare ? 1 : lattice.a/2) * sum(efs .^ 2)]
+        return [(occupations(state), L₀(state)) => (bare ? 1 : lattice.a/2) * electricfields(state)[link]^2]
     end
     return constructoperator(lattice, electricenergy; L_max = L_max, universe = universe, in_charge = charge, out_charge = charge)
+end
+
+@memoize function EDGaugeKinetic(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    return sum(EDGaugeKinetic.(Ref(lattice), 1:Int(lattice.N); L_max = L_max, universe = universe, bare = bare, charge = charge))
 end
 
 """
@@ -42,40 +51,43 @@ Computes the hopping term -i ∑(χ†ₙ χₙ₊₁ - χ†ₙ₊₁ χₙ) fo
 # Arguments
 - `lattice::Lattice`: Schwinger model lattice.
 """
-@memoize function EDHopping(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
+@memoize function EDHopping(lattice::Lattice, bond::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
     N, F = Int(lattice.N), lattice.F
     L_max, universe = process_L_max_universe(lattice, L_max, universe)
     function hopping(state::BasisState)
         parities = [(-1)^sum(state.occupations[:,k]) for k in 1:F]
         hops = Dict{Tuple{BitMatrix,Int},ComplexF64}()
-        for j in 1:N
+        for (j, dir) in [(bond, 1), (mod(bond, N) + 1, -1)]   # the two directed hops on bond (bond, bond+1)
             for k in 1:F
-                for dir in [-1,1]
-                    !(1 ≤ j + dir ≤ N) && !(lattice.periodic) && continue
-                    j2 = j + dir - (j + dir > N ? N : 0) + (j + dir < 1 ? N : 0)
-                    if state.occupations[j,k] && !state.occupations[j2,k]
-                        sign = 1
+                !(1 ≤ j + dir ≤ N) && !(lattice.periodic) && continue
+                j2 = j + dir - (j + dir > N ? N : 0) + (j + dir < 1 ? N : 0)
+                if state.occupations[j,k] && !state.occupations[j2,k]
+                    sign = 1
 
-                        hopoccupations=copy(state.occupations)
-                        hopL₀=L₀(state)
-                        hopoccupations[j,k] = false
-                        hopoccupations[j2,k] = true
-                        if j==1 && dir==-1
-                            hopL₀ += lattice.q
-                            sign *= parities[k]
-                        elseif j==N && dir==1
-                            hopL₀ -= lattice.q
-                            sign *= parities[k]
-                        end
-
-                       hops[(hopoccupations, hopL₀)] = sign*dir*1im*(bare ? 1 : 1/(2*lattice.a))
+                    hopoccupations=copy(state.occupations)
+                    hopL₀=L₀(state)
+                    hopoccupations[j,k] = false
+                    hopoccupations[j2,k] = true
+                    if j==1 && dir==-1
+                        hopL₀ += lattice.q
+                        sign *= parities[k]
+                    elseif j==N && dir==1
+                        hopL₀ -= lattice.q
+                        sign *= parities[k]
                     end
+
+                    hops[(hopoccupations, hopL₀)] = sign*dir*1im*(bare ? 1 : 1/(2*lattice.a))
                 end
             end
         end
         return hops
     end
     return constructoperator(lattice, hopping; L_max = L_max, universe = universe, in_charge = charge, out_charge = charge)
+end
+
+@memoize function EDHopping(lattice::Lattice; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    return sum(EDHopping.(Ref(lattice), 1:Int(lattice.N); L_max = L_max, universe = universe, bare = bare, charge = charge))
 end
 
 @memoize function EDHoppingMass(lattice::Lattice, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0, bare::Bool = true, charge::Int = 0)
@@ -345,6 +357,59 @@ end
 
     opsum = opsum_hoppingmass(lattice, site; bare = bare)
     mpo = ITensorMPS.MPO(opsum, isnothing(sites) ? get_sites(lattice; L_max = L_max) : sites)
+    return ITensorOperator(lattice, mpo, L_max, universe)
+end
+
+# ---- per-link / per-site / per-bond ITensor term operators (used by `energy_density`) ----
+
+# electric energy on a single `link`: (a/2)⟨E_link²⟩, reusing AverageElectricField (power 2)
+@memoize function ITensorGaugeKinetic(lattice::Lattice, link::Int; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true)
+    op = ITensorAverageElectricField(lattice; power = 2, sitelist = [link], L_max = L_max, universe = universe)
+    return ITensorOperator(lattice, (bare ? 1.0 : lattice.a / 2) * op.mpo, op.L_max, op.universe)
+end
+
+function opsum_mass(lattice::Lattice, site::Int; bare::Bool = true)
+    term = OpSum()
+    for k in 1:lattice.F
+        ind = lattice.F*(site - 1) + k
+        term += (bare ? 1 : lattice.mlat[site][k]) * ((-1)^site),"Sz",ind
+    end
+    return term
+end
+@memoize function ITensorMass(lattice::Lattice, site::Int; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    mpo = ITensorMPS.MPO(opsum_mass(lattice, site; bare = bare), get_sites(lattice; L_max = L_max))
+    return ITensorOperator(lattice, mpo, L_max, universe)
+end
+
+function opsum_hopping(lattice::Lattice, bond::Int; bare::Bool = true)
+    N, F, a = Int(lattice.N), lattice.F, lattice.a
+    term = OpSum()
+    if bond < N
+        for k in 1:F
+            ind = F*(bond - 1) + k
+            term += "S+",ind,"S-",ind + F
+            term += "S-",ind,"S+",ind + F
+        end
+    elseif lattice.periodic
+        for k in 1:F
+            ind = F*(N - 1) + k
+            if F ≤ 2
+                term += "S+",ind,"S-",k,"raise",N*F + 1
+                term += "S-",ind,"S+",k,"lower",N*F + 1
+            else
+                term += 2^N,"S+",ind,"S-",k,"raise",N*F + 1, wigner_string(N, F, k)...
+                term += 2^N,"S-",ind,"S+",k,"lower",N*F + 1, wigner_string(N, F, k)...
+            end
+        end
+    else
+        term += 0,"Id",1
+    end
+    return (bare ? 1 : 1/(2a)) * term
+end
+@memoize function ITensorHopping(lattice::Lattice, bond::Int; L_max::Union{Int,Nothing} = nothing, universe::Int = 0, bare::Bool = true)
+    L_max, universe = process_L_max_universe(lattice, L_max, universe)
+    mpo = ITensorMPS.MPO(opsum_hopping(lattice, bond; bare = bare), get_sites(lattice; L_max = L_max))
     return ITensorOperator(lattice, mpo, L_max, universe)
 end
 
@@ -699,6 +764,71 @@ Computes the MPSKit hopping-mass operator for the Schwinger model.
     end
 
     return MPSKitOperator(lattice, mpo, universe)
+end
+
+# ---- per-site / per-link / per-bond MPSKit term operators (used by `energy_density`) ----
+
+"""
+`MPSKitGaugeKinetic(lattice, link)`
+
+Electric energy `(a/2)(Lₙ+θ/2π)²` on a single `link`, as a LEMPO whose link function is
+nonzero only on `link` (the charge still accumulates in the virtual bond).
+"""
+@memoize function MPSKitGaugeKinetic(lattice::Lattice, link::Int; universe::Int = 0)
+    isinf(lattice.N) && throw(ArgumentError("per-link MPSKitGaugeKinetic requires a finite lattice"))
+    N, F = Int(lattice.N), lattice.F
+    _, universe = process_L_max_universe(lattice, nothing, universe)
+    θ2πu = Base.convert(Vector{Float64}, lattice.θ2π[1:N]) .+ universe
+    fct = r::U1Irrep -> (lattice.a / 2) * (r.charge + θ2πu[link])^2
+    fcts = Union{Missing,Function}[k == link * F ? fct : missing for k in 1:N*F]
+    return MPSKitOperator(lattice, FiniteLEMPOHamiltonian(get_mpskit_spaces(lattice), fcts), universe)
+end
+
+"""
+`MPSKitMass(lattice, site)`
+
+Staggered mass term on a single `site` (summed over flavors).
+"""
+@memoize function MPSKitMass(lattice::Lattice, site::Int; universe::Int = 0, bare::Bool = true)
+    isinf(lattice.N) && throw(ArgumentError("per-site MPSKitMass requires a finite lattice"))
+    F = lattice.F
+    _, universe = process_L_max_universe(lattice, nothing, universe)
+    sp = collect(get_mpskit_spaces(lattice))
+    function massop(P)                                  # diagonal: empty −½, occupied +½
+        T = zeros(ComplexF64, P ← P)
+        block(T, U1Irrep(0)) .= -0.5
+        block(T, U1Irrep(isodd(site) ? -lattice.q : lattice.q)) .= 0.5
+        return T
+    end
+    terms = [(site - 1)*F + f => ComplexF64(bare ? 1 : lattice.mlat[site][f]) * massop(sp[(site - 1)*F + f]) for f in 1:F]
+    return MPSKitOperator(lattice, FiniteMPOHamiltonian(sp, terms...), universe)
+end
+
+"""
+`MPSKitHopping(lattice, bond)`
+
+Hopping term `1/(2a)(χ†ₙχₙ₊₁ + h.c.)` on a single `bond` `(bond, bond+1)`, summed over
+flavors and the two charge-transfer directions.
+"""
+@memoize function MPSKitHopping(lattice::Lattice, bond::Int; universe::Int = 0, bare::Bool = true)
+    isinf(lattice.N) && throw(ArgumentError("per-bond MPSKitHopping requires a finite lattice"))
+    N, F = Int(lattice.N), lattice.F
+    _, universe = process_L_max_universe(lattice, nothing, universe)
+    sp = collect(get_mpskit_spaces(lattice))
+    idop(P) = isomorphism(ComplexF64, U1Space(0 => 1) ⊗ P, P ⊗ U1Space(0 => 1))
+    coeff = bare ? 1.0 : 1 / (2 * lattice.a)
+    ops = MPSKitOperator[]
+    for f in 1:F, qs in (lattice.q, -lattice.q)
+        i1, i2 = (bond - 1)*F + f, bond*F + f
+        ts = Any[idop(sp[k]) for k in 1:N*F]
+        for k in (i1 + 1):(i2 - 1)                       # carry the charge across intervening sites
+            ts[k] = Base.convert(TensorMap, BraidingTensor(sp[k], U1Space(qs => 1)))
+        end
+        ts[i1] = coeff * ones(ComplexF64, U1Space(0 => 1) ⊗ sp[i1] ← sp[i1] ⊗ U1Space(qs => 1))
+        ts[i2] = ones(ComplexF64, U1Space(qs => 1) ⊗ sp[i2] ← sp[i2] ⊗ U1Space(0 => 1))
+        push!(ops, MPSKitOperator(lattice, FiniteMPO([t for t in ts]), universe))
+    end
+    return ops
 end
 
 # Combined matter MPO channel-matrices (hopping + mass + hopping-mass), before any defect

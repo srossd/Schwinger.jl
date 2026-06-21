@@ -38,7 +38,7 @@ export expectation, act
 export evolve
 
 # Observables
-export energy, energy_density, occupation, occupations
+export energy, energy_density, energy_densities, occupation, occupations
 export charge, charges
 export L₀, electricfield, electricfields
 export entanglement, entanglements

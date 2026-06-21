@@ -25,6 +25,10 @@ using Test
     @testset "Zero-length Wilson line" begin
         include("wilson_line.jl")
     end
+
+    @testset "Energy densities" begin
+        include("energy_density.jl")
+    end
 end
 
 @testset "Time evolution tests" begin

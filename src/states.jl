@@ -651,6 +651,179 @@ function energy_density(state::Union{EDState,ITensorState,MPSKitState})
 end
 
 """
+`energy_density(state, site)`
+
+Return the energy associated with `site`: the electric energy on link `site`, the mass
+on site `site`, and the hopping (and hopping-mass) on the bond `(site, site+1)`. Summing
+over all sites gives the total energy (see [`energy_densities`](@ref)).
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+- `site::Int`: site.
+"""
+# The mass operator on `site` (an on-site term).
+_mass_op(state::EDState, site::Int) = EDMass(lattice(state), site; bare = false,
+    L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe, charge = state.net_charge)
+_mass_op(state::ITensorState, site::Int) = ITensorMass(lattice(state), site; bare = false,
+    L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
+_mass_op(state::MPSKitState, site::Int) = MPSKitMass(lattice(state), site; bare = false,
+    universe = state.hamiltonian.universe)
+
+# The energy on bond/link ℓ: the electric energy on link ℓ plus the hopping and
+# hopping-mass on bond (ℓ, ℓ+1) — everything that lives *between* sites ℓ and ℓ+1.
+function _bond_energy(state::EDState, ℓ::Int)
+    lat = lattice(state); kw = (; L_max = state.hamiltonian.L_max,
+                                universe = state.hamiltonian.universe, charge = state.net_charge)
+    return _gauge_link_energy(state, ℓ) +
+           real(expectation(EDHopping(lat, ℓ; bare = false, kw...), state)) +
+           real(expectation(EDHoppingMass(lat, ℓ; bare = false, kw...), state))
+end
+function _bond_energy(state::ITensorState, ℓ::Int)
+    lat = lattice(state); kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
+    return _gauge_link_energy(state, ℓ) +
+           real(expectation(ITensorHopping(lat, ℓ; bare = false, kw...), state)) +
+           real(expectation(ITensorHoppingMass(lat, ℓ; bare = false, kw...), state))
+end
+function _bond_energy(state::MPSKitState, ℓ::Int)
+    lat = lattice(state); u = state.hamiltonian.universe; N = Int(lat.N)
+    e = _gauge_link_energy(state, ℓ) + real(expectation(MPSKitHoppingMass(lat, ℓ; bare = false, universe = u), state))
+    ℓ < N && (e += sum(real(expectation(op, state)) for op in MPSKitHopping(lat, ℓ; bare = false, universe = u)))
+    return e
+end
+
+# expectation of the electric energy (a/2)(Lₗᵢₙₖ+θ)² on a single `link`
+_gauge_link_energy(state::EDState, link::Int) = real(expectation(
+    EDGaugeKinetic(lattice(state), link; bare = false, L_max = state.hamiltonian.L_max,
+                   universe = state.hamiltonian.universe, charge = state.net_charge), state))
+_gauge_link_energy(state::ITensorState, link::Int) = real(expectation(
+    ITensorGaugeKinetic(lattice(state), link; bare = false, L_max = state.hamiltonian.L_max,
+                        universe = state.hamiltonian.universe), state))
+_gauge_link_energy(state::MPSKitState, link::Int) = real(expectation(
+    MPSKitGaugeKinetic(lattice(state), link; universe = state.hamiltonian.universe), state))
+
+# Average a per-bond quantity `b(ℓ)` (electric + hopping + hopping-mass, all of which live
+# between sites ℓ and ℓ+1) over the two bonds neighboring `site`: an interior site gets
+# ½·(left bond + right bond); a bond with a single neighboring site (a true open boundary,
+# `boundary = true` for the rightmost bond of a finite lattice) is assigned in full, so the
+# per-site energies still sum to the total. Mass is on-site and is added separately.
+function _averaged_bond(b, site::Int, N::Int, boundary::Bool)
+    e = site ≥ 2 ? 0.5 * b(site - 1) : 0.0
+    e += site < N ? 0.5 * b(site) : (boundary ? b(site) : 0.0)
+    return e
+end
+
+function energy_density(state::Union{EDState,ITensorState,MPSKitState}, site::Int)
+    if state isa MPSKitState && _isfinitewindow(state)
+        return _energy_density_window(state, site)   # wavepacket on an infinite background
+    end
+    isinf(lattice(state).N) && throw(ArgumentError("per-site energy_density requires a finite lattice"))
+    N = Int(lattice(state).N)
+    return real(expectation(_mass_op(state, site), state)) +
+           _averaged_bond(ℓ -> _bond_energy(state, ℓ), site, N, true)
+end
+
+# Per-site energy of a wavepacket `WindowMPS` (infinite background): the gauge-integrated
+# electric energy is non-local, but the per-link `(a/2)⟨(Lₙ+θ)²⟩` is obtained from the bond
+# (flux) distribution via `link_expectation`, the on-site mass / two-site hopping via local
+# expectation values. The mass is on-site; the electric + hopping (+ hopping-mass) energy
+# is averaged over the two bonds neighboring the site. Currently supports F = 1.
+function _energy_density_window(state::MPSKitState, site::Int)
+    lat = lattice(state); ψ = state.psi
+    lat.F == 1 || throw(ArgumentError("energy_density on a WindowMPS currently supports F = 1"))
+    W = length(ψ); u = state.hamiltonian.universe
+    sp = get_mpskit_spaces(lat); P(n) = sp[mod1(n, length(sp))]
+    q = lat.q; a = lat.a
+    nrm2 = real(dot(ψ, ψ))   # the wavepacket is not normalized; link_expectation is unnormalized
+
+    # mass on site `site`
+    mop = zeros(ComplexF64, P(site) ← P(site))
+    block(mop, U1Irrep(0)) .= -0.5
+    block(mop, U1Irrep(isodd(site) ? -q : q)) .= 0.5
+    e = real(MPSKit.expectation_value(ψ, site => lat.mlat[mod1(site, length(lat.mlat))][1] * mop))
+
+    # energy on internal bond/link ℓ (1 … W-1): electric (flux distribution) + hopping
+    # (+ hopping-mass); the window boundary bonds join the infinite environment.
+    function bond(ℓ)
+        θℓ = Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u
+        b = link_expectation(ψ, ℓ, r::U1Irrep -> (a / 2) * (r.charge + θℓ)^2) / nrm2
+        raw = nothing
+        for qs in (q, -q)
+            openT  = ones(ComplexF64, U1Space(0 => 1) ⊗ P(ℓ)     ← P(ℓ)     ⊗ U1Space(qs => 1))
+            closeT = ones(ComplexF64, U1Space(qs => 1) ⊗ P(ℓ + 1) ← P(ℓ + 1) ⊗ U1Space(0 => 1))
+            @tensor t[-1 -2; -3 -4] := openT[1, -1; -3, 2] * closeT[2, -2; -4, 1]
+            raw = raw === nothing ? t : raw + t
+        end
+        coeff = 1/(2a) + (-1)^(ℓ + 1) * lat.mprime[mod1(ℓ, length(lat.mprime))][1]
+        return b + real(coeff * MPSKit.expectation_value(ψ, (ℓ, ℓ + 1) => raw))
+    end
+    e += _averaged_bond(bond, site, W, false)
+    return real(e)
+end
+
+# Batched version of `_energy_density_window` for the whole window. The per-site
+# `_energy_density_window` recomputes the (global) norm `dot(ψ, ψ)` and rebuilds every
+# operator on each call, and `_averaged_bond` evaluates each internal bond twice — so the
+# naive `energy_density.(site)` is O(W²). Here the norm is computed once, the on-site mass
+# and per-bond energies are each computed once, the operators are cached by parity, and the
+# per-site values are assembled from those. Result is identical to the per-site routine.
+function _energy_densities_window(state::MPSKitState)
+    lat = lattice(state); ψ = state.psi
+    lat.F == 1 || throw(ArgumentError("energy_density on a window currently supports F = 1"))
+    W = length(ψ); u = state.hamiltonian.universe
+    sp = get_mpskit_spaces(lat); P(n) = sp[mod1(n, length(sp))]
+    q = lat.q; a = lat.a
+    nrm2 = real(dot(ψ, ψ))
+
+    massop(site) = begin
+        mop = zeros(ComplexF64, P(site) ← P(site))
+        block(mop, U1Irrep(0)) .= -0.5
+        block(mop, U1Irrep(isodd(site) ? -q : q)) .= 0.5
+        lat.mlat[mod1(site, length(lat.mlat))][1] * mop
+    end
+    hopcache = Dict{Bool,Any}()                          # hopping operator depends only on bond parity
+    hopop(ℓ) = get!(hopcache, isodd(ℓ)) do
+        raw = nothing
+        for qs in (q, -q)
+            openT  = ones(ComplexF64, U1Space(0 => 1) ⊗ P(ℓ)     ← P(ℓ)     ⊗ U1Space(qs => 1))
+            closeT = ones(ComplexF64, U1Space(qs => 1) ⊗ P(ℓ + 1) ← P(ℓ + 1) ⊗ U1Space(0 => 1))
+            @tensor t[-1 -2; -3 -4] := openT[1, -1; -3, 2] * closeT[2, -2; -4, 1]
+            raw = raw === nothing ? t : raw + t
+        end
+        raw
+    end
+
+    # Contract the local center tensors directly (as `expectation_value` does internally)
+    # but divide by the single `nrm2` — `expectation_value` recomputes `dot(ψ, ψ)` on every
+    # call, which over the whole window is the dominant cost.
+    masses = [real(MPSKit.contract_mpo_expval1(ψ.AC[site], massop(site))) / nrm2 for site in 1:W]
+    bonds = map(1:W-1) do ℓ                              # each internal bond once
+        θℓ = Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u
+        b = link_expectation(ψ, ℓ, r::U1Irrep -> (a / 2) * (r.charge + θℓ)^2) / nrm2
+        coeff = 1/(2a) + (-1)^(ℓ + 1) * lat.mprime[mod1(ℓ, length(lat.mprime))][1]
+        hop = real(MPSKit.contract_mpo_expval2(ψ.AC[ℓ], ψ.AR[ℓ + 1], hopop(ℓ))) / nrm2
+        b + coeff * hop
+    end
+    return [masses[site] + _averaged_bond(ℓ -> bonds[ℓ], site, W, false) for site in 1:W]
+end
+
+"""
+`energy_densities(state)`
+
+Return the list of per-site energies of `state` on sites 1 through N; their sum is the
+total energy of the state.
+
+# Arguments
+- `state::SchwingerState`: Schwinger model state.
+"""
+function energy_densities(state::SchwingerState)
+    if state isa MPSKitState && _isfinitewindow(state)
+        return _energy_densities_window(state)            # batched: norm/bonds computed once
+    end
+    N = isinf(lattice(state).N) ? 2 : Int(lattice(state).N)
+    return energy_density.(Ref(state), 1:N)
+end
+
+"""
 `energy(state)`
 
 Return the expectation value of the Hamiltonian.
