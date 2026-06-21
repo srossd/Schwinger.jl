@@ -330,10 +330,17 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
 # Arguments
 - `hamiltonian::MPOOperator`: Schwinger model Hamiltonian.
 - `nstates::Int`:: number of states to determine.
+- `momentum::Union{Real,Nothing} = nothing`: for an infinite lattice (MPSKit backend), the
+  physical momentum (in units of the coupling `g`, like the rest of the code) at which to
+  build the excited (quasiparticle) states; defaults to `0`. Internally converted to MPSKit's
+  dimensionless lattice momentum `a·p`. Only supported on infinite lattices — passing a
+  non-`nothing` value for a finite lattice throws an `ArgumentError`.
 """
-function loweststates(hamiltonian::ITensorOperator, nstates::Int; 
-    maxiters::Int = 500, initiallinkdim::Int = 4, maxlinkdim::Int = 600, energy_tol::Real = 1E-6, weight::Real = 100, outputlevel::Int = 0, minsweeps::Int = 5)
+function loweststates(hamiltonian::ITensorOperator, nstates::Int;
+    maxiters::Int = 500, initiallinkdim::Int = 4, maxlinkdim::Int = 600, energy_tol::Real = 1E-6, weight::Real = 100, outputlevel::Int = 0, minsweeps::Int = 5,
+    momentum::Union{Real,Nothing} = nothing)
 
+    isnothing(momentum) || throw(ArgumentError("Momentum-resolved excitations not supported for finite lattices"))
     H = hamiltonian.mpo
     N, F = hamiltonian.lattice.N, hamiltonian.lattice.F
 
@@ -368,7 +375,9 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
 - `hamiltonian::EDOperator`: Schwinger model Hamiltonian.
 - `nstates::Int`:: number of states to determine.
 """
-function loweststates(hamiltonian::EDOperator, nstates::Int; ncv::Int = max(20, 2*nstates + 1))
+function loweststates(hamiltonian::EDOperator, nstates::Int; ncv::Int = max(20, 2*nstates + 1),
+    momentum::Union{Real,Nothing} = nothing)
+    isnothing(momentum) || throw(ArgumentError("Momentum-resolved excitations not supported for finite lattices"))
     _, vecs = if nstates + 2 < size(hamiltonian.matrix)[1]
         try
             Arpack.eigs(hamiltonian.matrix; nev=nstates, ncv = ncv, which=:SR)
@@ -418,7 +427,10 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         if nstates > 1
             isnothing(momentum) && (momentum = 0.0)
             algqp = MPSKit.QuasiparticleAnsatz()
-            _, psis = MPSKit.excitations(H, algqp, momentum, ψ, envs; num = nstates - 1)
+            # `momentum` is the physical momentum (units of the coupling g); MPSKit's
+            # excitation momentum is the dimensionless lattice momentum a·p (phase per site).
+            lattice_momentum = hamiltonian.lattice.a * momentum
+            _, psis = MPSKit.excitations(H, algqp, lattice_momentum, ψ, envs; num = nstates - 1)
             for n in 2:nstates
                 states[n] = MPSKitQPState(hamiltonian, psis[n-1])
             end
@@ -653,9 +665,10 @@ end
 """
 `energy_density(state, site)`
 
-Return the energy associated with `site`: the electric energy on link `site`, the mass
-on site `site`, and the hopping (and hopping-mass) on the bond `(site, site+1)`. Summing
-over all sites gives the total energy (see [`energy_densities`](@ref)).
+Return the energy density (energy per unit length) at `site`: the electric energy on link
+`site`, the mass on site `site`, and the hopping (and hopping-mass) on the bond
+`(site, site+1)`, all divided by the lattice spacing `a`. Summing over all sites and
+multiplying by `a` gives the total energy (see [`energy_densities`](@ref)).
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
@@ -718,8 +731,9 @@ function energy_density(state::Union{EDState,ITensorState,MPSKitState}, site::In
     end
     isinf(lattice(state).N) && throw(ArgumentError("per-site energy_density requires a finite lattice"))
     N = Int(lattice(state).N)
-    return real(expectation(_mass_op(state, site), state)) +
-           _averaged_bond(ℓ -> _bond_energy(state, ℓ), site, N, true)
+    # energy per unit length: per-site energy / a (so Σ energy_densities · a = total energy)
+    return (real(expectation(_mass_op(state, site), state)) +
+            _averaged_bond(ℓ -> _bond_energy(state, ℓ), site, N, true)) / lattice(state).a
 end
 
 # Per-site energy of a wavepacket `WindowMPS` (infinite background): the gauge-integrated
@@ -757,7 +771,7 @@ function _energy_density_window(state::MPSKitState, site::Int)
         return b + real(coeff * MPSKit.expectation_value(ψ, (ℓ, ℓ + 1) => raw))
     end
     e += _averaged_bond(bond, site, W, false)
-    return real(e)
+    return real(e) / a   # energy per unit length
 end
 
 # Batched version of `_energy_density_window` for the whole window. The per-site
@@ -803,14 +817,14 @@ function _energy_densities_window(state::MPSKitState)
         hop = real(MPSKit.contract_mpo_expval2(ψ.AC[ℓ], ψ.AR[ℓ + 1], hopop(ℓ))) / nrm2
         b + coeff * hop
     end
-    return [masses[site] + _averaged_bond(ℓ -> bonds[ℓ], site, W, false) for site in 1:W]
+    return [(masses[site] + _averaged_bond(ℓ -> bonds[ℓ], site, W, false)) / a for site in 1:W]   # per unit length
 end
 
 """
 `energy_densities(state)`
 
-Return the list of per-site energies of `state` on sites 1 through N; their sum is the
-total energy of the state.
+Return the list of energy densities (energy per unit length) of `state` on sites 1 through
+N; their sum times the lattice spacing `a` is the total energy of the state.
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
