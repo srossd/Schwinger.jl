@@ -727,7 +727,7 @@ end
 
 function energy_density(state::Union{EDState,ITensorState,MPSKitState}, site::Int)
     if state isa MPSKitState && _isfinitewindow(state)
-        return _energy_density_window(state, site)   # wavepacket on an infinite background
+        return _energy_densities_window(state)[site]   # wavepacket on an infinite background
     end
     isinf(lattice(state).N) && throw(ArgumentError("per-site energy_density requires a finite lattice"))
     N = Int(lattice(state).N)
@@ -736,50 +736,24 @@ function energy_density(state::Union{EDState,ITensorState,MPSKitState}, site::In
             _averaged_bond(ℓ -> _bond_energy(state, ℓ), site, N, true)) / lattice(state).a
 end
 
-# Per-site energy of a wavepacket `WindowMPS` (infinite background): the gauge-integrated
-# electric energy is non-local, but the per-link `(a/2)⟨(Lₙ+θ)²⟩` is obtained from the bond
-# (flux) distribution via `link_expectation`, the on-site mass / two-site hopping via local
-# expectation values. The mass is on-site; the electric + hopping (+ hopping-mass) energy
-# is averaged over the two bonds neighboring the site. Currently supports F = 1.
-function _energy_density_window(state::MPSKitState, site::Int)
-    lat = lattice(state); ψ = state.psi
-    lat.F == 1 || throw(ArgumentError("energy_density on a WindowMPS currently supports F = 1"))
-    W = length(ψ); u = state.hamiltonian.universe
-    sp = get_mpskit_spaces(lat); P(n) = sp[mod1(n, length(sp))]
-    q = lat.q; a = lat.a
-    nrm2 = real(dot(ψ, ψ))   # the wavepacket is not normalized; link_expectation is unnormalized
-
-    # mass on site `site`
-    mop = zeros(ComplexF64, P(site) ← P(site))
-    block(mop, U1Irrep(0)) .= -0.5
-    block(mop, U1Irrep(isodd(site) ? -q : q)) .= 0.5
-    e = real(MPSKit.expectation_value(ψ, site => lat.mlat[mod1(site, length(lat.mlat))][1] * mop))
-
-    # energy on internal bond/link ℓ (1 … W-1): electric (flux distribution) + hopping
-    # (+ hopping-mass); the window boundary bonds join the infinite environment.
-    function bond(ℓ)
-        θℓ = Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u
-        b = link_expectation(ψ, ℓ, r::U1Irrep -> (a / 2) * (r.charge + θℓ)^2) / nrm2
-        raw = nothing
-        for qs in (q, -q)
-            openT  = ones(ComplexF64, U1Space(0 => 1) ⊗ P(ℓ)     ← P(ℓ)     ⊗ U1Space(qs => 1))
-            closeT = ones(ComplexF64, U1Space(qs => 1) ⊗ P(ℓ + 1) ← P(ℓ + 1) ⊗ U1Space(0 => 1))
-            @tensor t[-1 -2; -3 -4] := openT[1, -1; -3, 2] * closeT[2, -2; -4, 1]
-            raw = raw === nothing ? t : raw + t
-        end
-        coeff = 1/(2a) + (-1)^(ℓ + 1) * lat.mprime[mod1(ℓ, length(lat.mprime))][1]
-        return b + real(coeff * MPSKit.expectation_value(ψ, (ℓ, ℓ + 1) => raw))
-    end
-    e += _averaged_bond(bond, site, W, false)
-    return real(e) / a   # energy per unit length
+# The left/right "wings" of a wavepacket `WindowMPS` are the infinite vacuum. Expose them as
+# ordinary (infinite) `MPSKitState`s so existing observables (e.g. `energy_density`) can be
+# evaluated on them — used to supply the boundary bond that the finite window otherwise drops.
+function _window_vacua(state::MPSKitState)
+    ψ = state.psi
+    ψ isa WindowMPS || throw(ArgumentError("_window_vacua requires a WindowMPS-backed state"))
+    return MPSKitState(state.hamiltonian, ψ.left_gs), MPSKitState(state.hamiltonian, ψ.right_gs)
 end
 
-# Batched version of `_energy_density_window` for the whole window. The per-site
-# `_energy_density_window` recomputes the (global) norm `dot(ψ, ψ)` and rebuilds every
-# operator on each call, and `_averaged_bond` evaluates each internal bond twice — so the
-# naive `energy_density.(site)` is O(W²). Here the norm is computed once, the on-site mass
-# and per-bond energies are each computed once, the operators are cached by parity, and the
-# per-site values are assembled from those. Result is identical to the per-site routine.
+# Per-site energy of a wavepacket `WindowMPS` (infinite background), for the whole window.
+# The gauge-integrated electric energy is non-local, but the per-link `(a/2)⟨(Lₙ+θ)²⟩` comes
+# from the bond (flux) distribution via `link_expectation`, and the on-site mass / two-site
+# hopping (+ hopping-mass) from local expectation values; the mass is on-site and the bond
+# energy is averaged over the two bonds neighboring each site. The wavepacket is unnormalized,
+# so the norm `dot(ψ,ψ)` is computed once and divided out (rather than per `expectation_value`
+# call, which recomputes it — the dominant cost). Operators are cached by site/bond parity and
+# contracted directly via `contract_mpo_expval1/2`. Currently supports F = 1.
+# (`energy_density(state, site)` on a window indexes into this.)
 function _energy_densities_window(state::MPSKitState)
     lat = lattice(state); ψ = state.psi
     lat.F == 1 || throw(ArgumentError("energy_density on a window currently supports F = 1"))
@@ -806,9 +780,6 @@ function _energy_densities_window(state::MPSKitState)
         raw
     end
 
-    # Contract the local center tensors directly (as `expectation_value` does internally)
-    # but divide by the single `nrm2` — `expectation_value` recomputes `dot(ψ, ψ)` on every
-    # call, which over the whole window is the dominant cost.
     masses = [real(MPSKit.contract_mpo_expval1(ψ.AC[site], massop(site))) / nrm2 for site in 1:W]
     bonds = map(1:W-1) do ℓ                              # each internal bond once
         θℓ = Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u
@@ -817,7 +788,20 @@ function _energy_densities_window(state::MPSKitState)
         hop = real(MPSKit.contract_mpo_expval2(ψ.AC[ℓ], ψ.AR[ℓ + 1], hopop(ℓ))) / nrm2
         b + coeff * hop
     end
-    return [(masses[site] + _averaged_bond(ℓ -> bonds[ℓ], site, W, false)) / a for site in 1:W]   # per unit length
+    eds = [(masses[site] + _averaged_bond(ℓ -> bonds[ℓ], site, W, false)) / a for site in 1:W]   # per unit length
+
+    # The two outermost sites miss the bond into the wing, which spikes their energy density.
+    # For a `WindowMPS` the wings are the explicit infinite vacuum, so replace those sites with
+    # the wing's vacuum energy density (≈ what a bulk vacuum site carries). This adds energy
+    # living partly in the wings, so Σ(eds)·a no longer equals the window energy exactly — the
+    # sum rule is therefore not asserted for window states. A bare `FiniteMPS` has no wing (a
+    # genuine open boundary), so it is left as is.
+    if ψ isa WindowMPS
+        lv, rv = _window_vacua(state)
+        eds[1]   = real(energy_density(lv))
+        eds[end] = real(energy_density(rv))
+    end
+    return eds
 end
 
 """
