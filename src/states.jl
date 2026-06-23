@@ -419,7 +419,9 @@ function _charge_conjugate_vacuum(psi::MPSKit.InfiniteMPS, n::Int)
         vLs, phs, vRs = TensorKit.space(A, 1), TensorKit.space(A, 2), TensorKit.space(A, 3)
         newvL = U1Space((U1Irrep(-c.charge + shift) => TensorKit.dim(vLs, c) for c in TensorKit.sectors(vLs))...)
         newph = U1Space((U1Irrep(-c.charge)         => TensorKit.dim(phs, c) for c in TensorKit.sectors(phs))...)
-        newvR = U1Space((U1Irrep(-c.charge + shift) => TensorKit.dim(vRs, c) for c in TensorKit.sectors(vRs))...)
+        # vR is the (dual) right-virtual leg, so its block dim lives at the conjugate charge —
+        # map c → c + shift here (not -c + shift as for the nondual codomain legs).
+        newvR = U1Space((U1Irrep(c.charge + shift) => TensorKit.dim(vRs, c) for c in TensorKit.sectors(vRs))...)
         B = zeros(ComplexF64, (newvL ⊗ newph) ← newvR)
         targets = Dict{NTuple{3,Int},Any}()
         for (g1, g2) in TensorKit.fusiontrees(B)
@@ -464,7 +466,7 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
   per momentum), all built on the same vacua so any pair shares backgrounds.
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
-    maxiters::Int = 500, initiallinkdim::Int = 20, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing, AbstractVector} = nothing,
+    maxiters::Int = 500, initiallinkdim::Int = 10, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing, AbstractVector} = nothing,
     solitons::Bool = false, attenuation::Real = 1e-3)
 
     initiallinkdim = something(bonddim, initiallinkdim)   # `bonddim` is an alias
@@ -472,6 +474,12 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     H = hamiltonian.lempo
     spaces = get_mpskit_spaces(hamiltonian.lattice)   # defect sites are added in the finite branch
     total_defect = sum(d.charge for d in hamiltonian.defects; init = 0)
+
+    # VUMPS finalizer: after each iteration, adapt the virtual spaces with a two-site SVD update
+    # (`VUMPSSvdCut`), truncating singular values at relative tolerance `cutoff`. Starting from the
+    # small `initiallinkdim`, this lets the bond dimension grow to whatever the state needs.
+    vumps_finalize = (it, st, op, ev) ->
+        MPSKit.changebonds(st, op, MPSKit.VUMPSSvdCut(; trscheme = trunctol(; rtol = cutoff)), ev)
 
     # Soliton sector at θ = π (mod 2π): the model has two degenerate vacua v1, v2 whose
     # background electric field sits near U1Irrep(n) and U1Irrep(n+1), with n = -1/2 - θ/2π.
@@ -491,7 +499,7 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         n  = round(Int, -0.5 - θ2π)
         Uc = length(spaces)
         ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:Uc])
-        alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0)
+        alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0, finalize = vumps_finalize)
         # Solve the first vacuum (biased to background charge n by `attenuateLinks`), then obtain
         # the second as its charge conjugate. Using C rather than a second independent VUMPS solve
         # fixes the two vacua's relative phase, removing the soliton's phase ambiguity (and is
@@ -540,7 +548,7 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         if abs(hamiltonian.lattice.θ2π[1] - 0.5) < 0.1
             ψ₀ = attenuateLinks(ψ₀, hamiltonian.lattice.θ2π[1] < 0.5 ? [U1Irrep(0), U1Irrep(0)] : [U1Irrep(-1), U1Irrep(-1)], 0.01)
         end
-        alg = MPSKit.VUMPS(; maxiter=maxiters, tol=energy_tol, verbosity=verbose ? 1 : 0) #TODO: use VUMPSSVDCut once upstream bug fixed
+        alg = MPSKit.VUMPS(; maxiter=maxiters, tol=energy_tol, verbosity=verbose ? 1 : 0, finalize = vumps_finalize)
         ψ, envs, _ = MPSKit.find_groundstate(ψ₀, H, alg)
         states[1] = MPSKitState(hamiltonian, ψ)
         
