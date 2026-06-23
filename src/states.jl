@@ -407,13 +407,61 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 - `nstates::Int`:: number of states to determine.
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
-    maxiters::Int = 500, initiallinkdim::Int = 20, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing} = nothing)
+    maxiters::Int = 500, initiallinkdim::Int = 20, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing} = nothing,
+    solitons::Union{Bool,Symbol} = false, attenuation::Real = 1e-3)
 
     initiallinkdim = something(bonddim, initiallinkdim)   # `bonddim` is an alias
 
     H = hamiltonian.lempo
     spaces = get_mpskit_spaces(hamiltonian.lattice)   # defect sites are added in the finite branch
     total_defect = sum(d.charge for d in hamiltonian.defects; init = 0)
+
+    # Soliton sector at θ = π (mod 2π): the model has two degenerate vacua whose background
+    # electric field sits near U1Irrep(n) and U1Irrep(n+1), with n = -1/2 - θ/2π. A soliton is
+    # a domain wall between them, obtained as a quasiparticle excitation built on the two vacua
+    # as left/right backgrounds. `result[1]` is the pair of vacua (ordered per :soliton /
+    # :antisoliton); `result[2:end]` are the soliton excitations.
+    if solitons !== false
+        solitons in (:soliton, :antisoliton) ||
+            throw(ArgumentError("solitons must be false, :soliton, or :antisoliton (got $(repr(solitons)))"))
+        isinf(hamiltonian.lattice.N) ||
+            throw(ArgumentError("solitons are only available on an infinite lattice"))
+        θ2π = hamiltonian.lattice.θ2π[1]
+        isapprox(mod(θ2π, 1.0), 0.5; atol = 1e-8) ||
+            throw(ArgumentError("solitons require θ = π (mod 2π), i.e. θ2π ≡ 1/2 (mod 1); got θ2π = $θ2π"))
+
+        n  = round(Int, -0.5 - θ2π)
+        Uc = length(spaces)
+        ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:Uc])
+        alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0)
+        ψa, envsa, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(U1Irrep(n),   Uc), attenuation), H, alg)
+        ψb, envsb, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(U1Irrep(n+1), Uc), attenuation), H, alg)
+        # :soliton runs from vacuum n to vacuum n+1; :antisoliton is the reverse
+        (ψL, envsL), (ψR, envsR) = solitons === :antisoliton ?
+            ((ψb, envsb), (ψa, envsa)) : ((ψa, envsa), (ψb, envsb))
+
+        gsL, gsR = MPSKitState(hamiltonian, ψL), MPSKitState(hamiltonian, ψR)
+        # The two θ=π vacua must differ (opposite background fields, ±1/2). If `attenuateLinks`
+        # failed to separate them, VUMPS lands on the same vacuum and the "soliton" is spurious.
+        isapprox(electricfields(gsL), electricfields(gsR); atol = 1e-3) &&
+            @warn "soliton vacua have nearly identical electric fields — attenuation did not select \
+                   the two distinct θ=π vacua, so the soliton is likely spurious. Try a smaller \
+                   `attenuation` (smaller = stronger)."
+
+        result = Vector{Any}(undef, nstates)
+        result[1] = (gsL, gsR)
+        if nstates > 1
+            isnothing(momentum) && (momentum = 0.0)
+            lattice_momentum = hamiltonian.lattice.a * momentum
+            _, psis = MPSKit.excitations(H, MPSKit.QuasiparticleAnsatz(), lattice_momentum,
+                                         ψL, envsL, ψR, envsR; num = nstates - 1)
+            for k in 2:nstates
+                result[k] = MPSKitQPState(hamiltonian, psis[k-1])
+            end
+        end
+        return result
+    end
+
     states = Vector{Union{MPSKitState,MPSKitQPState}}(undef, nstates)
     if isinf(hamiltonian.lattice.N)
         ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
@@ -1230,6 +1278,27 @@ function electricfields(state::SchwingerState)
         efs = efs .+ _defect_theta_shift(lat, ds)
     end
     return efs
+end
+
+# On an infinite lattice there is no boundary to anchor Gauss's law, so the generic
+# accumulate-charge formula above cannot resolve the background field — it returns the same
+# value for the two θ=π vacua (and is unreliable in general). Measure ⟨L+θ⟩ on each link
+# directly from the bond instead, via `link_expectation` (as the energy-density code does).
+function electricfields(state::MPSKitState)
+    lat = lattice(state)
+    (isinf(lat.N) && state.psi isa MPSKit.InfiniteMPS) ||
+        return invoke(electricfields, Tuple{SchwingerState}, state)
+    u = state.hamiltonian.universe
+    return [real(link_expectation(state.psi, ℓ,
+                r::U1Irrep -> Float64(r.charge) + Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u))
+            for ℓ in 1:length(state.psi)]
+end
+
+function electricfield(state::MPSKitState, link::Int)
+    lat = lattice(state)
+    (isinf(lat.N) && state.psi isa MPSKit.InfiniteMPS) ||
+        return invoke(electricfield, Tuple{SchwingerState,Int}, state, link)
+    return electricfields(state)[mod1(link, length(state.psi))]
 end
 
 function partialcode(state::BasisState, range::UnitRange{Int})

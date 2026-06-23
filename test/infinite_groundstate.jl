@@ -45,6 +45,13 @@ using ProgressMeter
         charges_inf = charges(mpskit_gs_inf)
         charges_finite = charges(mpskit_gs_finite)
         @test isapprox(charges_inf, charges_finite[middle_idxs]; rtol=tol)
+
+        # Electric fields: on the infinite lattice these are measured per link via
+        # `link_expectation` (Gauss's law has no boundary to anchor it); they must match the
+        # finite lattice's Gauss-law fields at the center.
+        ef_inf = electricfields(mpskit_gs_inf)
+        ef_finite = electricfields(mpskit_gs_finite)
+        @test isapprox(ef_inf, ef_finite[middle_idxs]; rtol=tol)
         
         # Entanglements
         ent_inf = entanglements(mpskit_gs_inf)
