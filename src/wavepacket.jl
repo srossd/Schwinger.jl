@@ -151,15 +151,10 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
         length(centers) == n && length(weights) == n ||
         throw(ArgumentError("supports, sigmas, centers, and weights must all have length $(n)"))
 
-    # All wavepackets must share the same background
-    left_gs  = states[1].psi.left_gs
-    right_gs = states[1].psi.right_gs
-    for i in 2:n
-        states[i].psi.left_gs === left_gs && states[i].psi.right_gs === right_gs ||
-            throw(ArgumentError("all states must share the same background MPS"))
-    end
-
-    Uc = length(left_gs)
+    # Each QP straddles its own (possibly distinct) left/right vacua: a solitonic QP has
+    # left_gs ≠ right_gs, an ordinary one has them equal. The vacua are checked for consistency
+    # across QP junctions after sorting by position (below).
+    Uc = length(states[1].psi.left_gs)
     W % Uc == 0 || throw(ArgumentError("Window size W must be a multiple of the unit cell length $(Uc)"))
 
     # Validate supports: must start on odd sites and end on even sites (unit cell alignment)
@@ -186,7 +181,17 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
             throw(ArgumentError("supports[$i] and supports[$(i+1)] must have at least 2 sites between them (not yet implemented overlap handling)"))
     end
 
-    T = storagetype(MPSKit.site_type(left_gs))
+    # Vacua must line up: each QP's right vacuum is the next QP's left vacuum, so the window is
+    # a consistent vacuum sequence (e.g. a v1→v2 soliton followed by a v2→v1 soliton). The
+    # window's environments are the first QP's left vacuum and the last QP's right vacuum.
+    for i in 1:n-1
+        states[i].psi.right_gs === states[i+1].psi.left_gs ||
+            throw(ArgumentError("vacua mismatch: states[$i].right_gs must equal states[$(i+1)].left_gs (adjacent QPs must share the vacuum between them)"))
+    end
+    left_env  = states[1].psi.left_gs
+    right_env = states[n].psi.right_gs
+
+    T = storagetype(MPSKit.site_type(left_env))
 
     # Build weight dict k => w for QP ℓ
     function make_ws(ℓ)
@@ -229,10 +234,6 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
         Dict(k => fuse_B(ws[k] * Bs[mod1(k, Uc)], utl) for k in supports[ℓ])
     end
 
-    # AL/AR tensors for every window site
-    ALs = [left_gs.AL[mod1(k, Uc)]  for k in 1:W]
-    ARs = [right_gs.AR[mod1(k, Uc)] for k in 1:W]
-
     # Map each window site to its QP support index (0 = not in any support)
     site_to_support = zeros(Int, W)
     for ℓ in 1:n
@@ -243,10 +244,27 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
     first_support_start = first(supports[1])     # supports are sorted by start
     last_support_end    = last(supports[n])
 
+    # The vacuum occupying each region: before the first support it is QP₁'s left vacuum, after
+    # the last it is QPₙ's right vacuum, and between supports a and a+1 it is their shared
+    # junction vacuum (QPₐ.right_gs ≡ QPₐ₊₁.left_gs).
+    function region_vacuum(k)
+        k < first_support_start && return states[1].psi.left_gs
+        k > last_support_end    && return states[n].psi.right_gs
+        a = findfirst(g -> last(supports[g]) < k < first(supports[g+1]), 1:n-1)
+        return states[a].psi.right_gs
+    end
+    # Per-site AL/AR, sourced from the correct vacuum: a support site uses its QP's left vacuum
+    # for the "QP-absent" (AL) state and its right vacuum for the "QP-present" (AR) state; a
+    # vacuum site uses its region vacuum for both. (Distinct only for solitonic QPs.)
+    lvac(k) = site_to_support[k] == 0 ? region_vacuum(k) : states[site_to_support[k]].psi.left_gs
+    rvac(k) = site_to_support[k] == 0 ? region_vacuum(k) : states[site_to_support[k]].psi.right_gs
+    ALs = [lvac(k).AL[mod1(k, Uc)] for k in 1:W]
+    ARs = [rvac(k).AR[mod1(k, Uc)] for k in 1:W]
+
     # Mixed-canonical background. Every QP straddles AL→AR, so each leaves the vacuum in
     # right-canonical (AR) gauge. The window must reach the next QP (and any QP except the
     # last needs AL on its left) in left-canonical (AL) gauge, so each inter-QP gap carries
-    # one AR→AL domain wall: the ground-state center matrix inverse C⁻¹ at a mid-gap bond
+    # one AR→AL domain wall: the junction vacuum's center matrix inverse C⁻¹ at a mid-gap bond
     # (ALₐ…ALᵦ ALᵦ₊₁… = Cₐ₋₁ ARₐ…ARᵦ Cᵦ⁻¹ ALᵦ₊₁…), absorbed into the AL just past the bond.
     # Left of the first QP is AL (left environment); right of the last QP is AR (right env).
     wall_bond = Dict{Int,Int}()                  # gap a (between support a, a+1) => bond b
@@ -262,7 +280,7 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
         b = wall_bond[a]
         k <= b && return ARs[k]                  # AR tail trailing QP a
         if k == b + 1                            # AR→AL domain wall, fused into AL[b+1]
-            Cinv = _trunc_pinv(left_gs.C[mod1(b, Uc)]; rtol = wall_rtol)
+            Cinv = _trunc_pinv(states[a].psi.right_gs.C[mod1(b, Uc)]; rtol = wall_rtol)
             @plansor t[-1 -2; -3] := Cinv[-1; 1] * ALs[k][1 -2; -3]
             return t
         end
@@ -277,12 +295,14 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
     # so every QP straddles an AL→AR transition (centred by the symmetric gauge). The
     # vacuum returns AR→AL between consecutive QPs via a domain wall (see `vacuum_tensor`).
     #
-    # Tensor shapes (VL = left_virtualspace, VR = right_virtualspace of AL[k]):
-    #   left boundary  (k == first(sup)):  VL        ← Vphys ⊗ (VR ⊕ VR)
-    #   interior sites (i < k < j):        (VL ⊕ VL) ← Vphys ⊗ (VR ⊕ VR)
-    #   right boundary (k == last(sup)):   (VL ⊕ VL) ← Vphys ⊗ VR
+    # Tensor shapes (subscripts l/r = left/right vacuum; equal for an ordinary QP). VL* is a
+    # left_virtualspace, VR* a right_virtualspace:
+    #   left boundary  (k == first(sup)):  VL_l            ← Vphys ⊗ (VR_l ⊕ VR_r)
+    #   interior sites (i < k < j):        (VL_l ⊕ VL_r)   ← Vphys ⊗ (VR_l ⊕ VR_r)
+    #   right boundary (k == last(sup)):   (VL_l ⊕ VL_r)   ← Vphys ⊗ VR_r
     #
-    # Isometries iso1, iso2 (both VV ← V) select the two halves of the doubled bond.
+    # Isometries iso1, iso2 select the two halves of the doubled bond (iso1 → the left-vacuum
+    # half, iso2 = left_null(iso1) → the right-vacuum half).
     # Following the MPSKit plansor embedding convention:
     #   left  embed: @plansor M[-1 -2; -3] += iso[-1; 1] * T[1 -2; -3]
     #   right embed: @plansor M[-1 -2; -3] += T[-1 -2; 1] * conj(iso[-3; 1])
@@ -295,15 +315,19 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
         is_left_bdy  = (k == first(sup))
         is_right_bdy = (k == last(sup))
 
-        VL    = MPSKit.left_virtualspace(AL)
-        VR    = MPSKit.right_virtualspace(AL)
-        VL_dbl = TensorKit.:⊕(VL, VL)
-        VR_dbl = TensorKit.:⊕(VR, VR)
+        # "QP-absent" state propagates the left vacuum (AL); "QP-present" the right vacuum
+        # (A_after). For a soliton these vacua — hence their virtual spaces — differ, so the
+        # doubled automaton bond is (left-vacuum space) ⊕ (right-vacuum space). For an ordinary
+        # QP the two coincide and this reduces to the previous VL⊕VL, VR⊕VR.
+        VL_l = MPSKit.left_virtualspace(AL);      VR_l = MPSKit.right_virtualspace(AL)
+        VL_r = MPSKit.left_virtualspace(A_after); VR_r = MPSKit.right_virtualspace(A_after)
+        VL_dbl = TensorKit.:⊕(VL_l, VL_r)
+        VR_dbl = TensorKit.:⊕(VR_l, VR_r)
 
         if is_left_bdy
             # Left boundary: 1D left bond → 2D right bond
             # Row vector [AL | B] — state 0 goes to AL, state 1 goes to B
-            iso1_R = isometry(T, VR_dbl, VR)
+            iso1_R = isometry(T, VR_dbl, VR_l)
             iso2_R = TensorKit.left_null(iso1_R)
             @plansor M[-1 -2; -3] := AL[-1 -2; 1] * conj(iso1_R[-3; 1])
             @plansor M[-1 -2; -3] += B[-1 -2; 1] * conj(iso2_R[-3; 1])
@@ -311,7 +335,7 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
         elseif is_right_bdy
             # Right boundary: 2D left bond → 1D right bond
             # Column vector [B; A_after] — from state 0 via B, from state 1 via A_after
-            iso1_L = isometry(T, VL_dbl, VL)
+            iso1_L = isometry(T, VL_dbl, VL_l)
             iso2_L = TensorKit.left_null(iso1_L)
             @plansor M[-1 -2; -3] := iso1_L[-1; 1] * B[1 -2; -3]
             @plansor M[-1 -2; -3] += iso2_L[-1; 1] * A_after[1 -2; -3]
@@ -320,9 +344,9 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
             # Interior: full 2×2 block
             # [AL       B    ]
             # [0        A_after]
-            iso1_L = isometry(T, VL_dbl, VL)
+            iso1_L = isometry(T, VL_dbl, VL_l)
             iso2_L = TensorKit.left_null(iso1_L)
-            iso1_R = isometry(T, VR_dbl, VR)
+            iso1_R = isometry(T, VR_dbl, VR_l)
             iso2_R = TensorKit.left_null(iso1_R)
             @plansor M[-1 -2; -3] := iso1_L[-1; 1] * AL[1 -2; 2] * conj(iso1_R[-3; 2])
             @plansor M[-1 -2; -3] += iso1_L[-1; 1] * B[1 -2; 2] * conj(iso2_R[-3; 2])
@@ -339,6 +363,6 @@ function wavepacket(states::AbstractVector{<:MPSKitQPState}, W::Int;
     end
 
     winfms = FiniteMPS(tensors; normalize=false)
-    psi = window ? WindowMPS(left_gs, winfms, right_gs) : winfms
+    psi = window ? WindowMPS(left_env, winfms, right_env) : winfms
     return MPSKitState(states[1].hamiltonian, psi)
 end

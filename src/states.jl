@@ -398,6 +398,53 @@ end
 
 
 """
+`_charge_conjugate_vacuum(psi, n)`
+
+Charge-conjugate a θ=π vacuum `InfiniteMPS`, returning the other degenerate vacuum.
+
+At θ = π the model has two degenerate vacua with background bond charge `n` and `n+1`. Charge
+conjugation `C` exchanges them; on the lattice it is a one-site translation together with the
+charge map (virtual `q → -q + (2n+1)`, physical `q → -q`) and complex conjugation of the tensor
+data. It is implemented by remapping fusion channels: for each native fusion tree of the target
+tensor, the (conjugated) data block of the matching source channel — identified by its coupled
+(flux) charge, which is independent of the dual-leg convention — is copied in.
+
+Building `v2 = C(v1)` instead of solving the second vacuum independently fixes the two vacua's
+relative phase (removing the soliton's phase ambiguity) and avoids a second VUMPS solve.
+"""
+function _charge_conjugate_vacuum(psi::MPSKit.InfiniteMPS, n::Int)
+    Uc    = length(psi)
+    shift = 2n + 1                        # virtual: q → -q + shift ;  physical: q → -q
+    function cc(A)
+        vLs, phs, vRs = TensorKit.space(A, 1), TensorKit.space(A, 2), TensorKit.space(A, 3)
+        newvL = U1Space((U1Irrep(-c.charge + shift) => TensorKit.dim(vLs, c) for c in TensorKit.sectors(vLs))...)
+        newph = U1Space((U1Irrep(-c.charge)         => TensorKit.dim(phs, c) for c in TensorKit.sectors(phs))...)
+        newvR = U1Space((U1Irrep(-c.charge + shift) => TensorKit.dim(vRs, c) for c in TensorKit.sectors(vRs))...)
+        B = zeros(ComplexF64, (newvL ⊗ newph) ← newvR)
+        targets = Dict{NTuple{3,Int},Any}()
+        for (g1, g2) in TensorKit.fusiontrees(B)
+            targets[(g1.coupled.charge, g1.uncoupled[1].charge, g1.uncoupled[2].charge)] = (g1, g2)
+        end
+        for (f1, f2) in TensorKit.fusiontrees(A)
+            key = (-f1.coupled.charge + shift, -f1.uncoupled[1].charge + shift, -f1.uncoupled[2].charge)
+            haskey(targets, key) || error("_charge_conjugate_vacuum: unmatched fusion channel $key")
+            g1, g2 = targets[key]
+            B[g1, g2] = conj.(A[f1, f2])
+        end
+        return B
+    end
+    # one-site translation (sublattice swap) composed with the per-site charge conjugation
+    newAL = [cc(psi.AL[mod1(i + 1, Uc)]) for i in 1:Uc]
+    # The one-site translation leaves a relative phase between the two sublattices that shifts
+    # the soliton momentum by π/2 (folding the dispersion minimum to k=π/2). A factor of -1 on
+    # one unit-cell tensor (a π/2 per-cell shift, since the per-cell shift is half the per-tensor
+    # phase) cancels it, putting the soliton dispersion minimum back at k=0.
+    newAL[1] = -newAL[1]
+    return MPSKit.InfiniteMPS(newAL)
+end
+
+
+"""
 `lowest_states(hamiltonian, nstates)`
 
 Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSKit.
@@ -405,10 +452,20 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 # Arguments
 - `hamiltonian::MPSKitOperator`: Schwinger model Hamiltonian.
 - `nstates::Int`:: number of states to determine.
+
+# Keywords
+- `momentum`: physical momentum (units of the coupling g) for the excitations on an infinite
+  lattice. May be a single value or a **list** of momenta. With a single value, each excited
+  entry of the result is one quasiparticle; with a list, each excited entry is a list of
+  quasiparticles at those momenta (so they can be combined into multi-particle states).
+- `solitons::Bool`: on an infinite θ=π lattice, return θ=π domain-wall (soliton) states.
+  `result[1]` is the vacuum pair `(v1, v2)`; for `k ≥ 2`, `result[k]` is the `(soliton,
+  antisoliton)` pair of the (k-1)-th band — or, for a momentum list, a list of such pairs (one
+  per momentum), all built on the same vacua so any pair shares backgrounds.
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
-    maxiters::Int = 500, initiallinkdim::Int = 20, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing} = nothing,
-    solitons::Union{Bool,Symbol} = false, attenuation::Real = 1e-3)
+    maxiters::Int = 500, initiallinkdim::Int = 20, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing, AbstractVector} = nothing,
+    solitons::Bool = false, attenuation::Real = 1e-3)
 
     initiallinkdim = something(bonddim, initiallinkdim)   # `bonddim` is an alias
 
@@ -416,14 +473,15 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     spaces = get_mpskit_spaces(hamiltonian.lattice)   # defect sites are added in the finite branch
     total_defect = sum(d.charge for d in hamiltonian.defects; init = 0)
 
-    # Soliton sector at θ = π (mod 2π): the model has two degenerate vacua whose background
-    # electric field sits near U1Irrep(n) and U1Irrep(n+1), with n = -1/2 - θ/2π. A soliton is
-    # a domain wall between them, obtained as a quasiparticle excitation built on the two vacua
-    # as left/right backgrounds. `result[1]` is the pair of vacua (ordered per :soliton /
-    # :antisoliton); `result[2:end]` are the soliton excitations.
-    if solitons !== false
-        solitons in (:soliton, :antisoliton) ||
-            throw(ArgumentError("solitons must be false, :soliton, or :antisoliton (got $(repr(solitons)))"))
+    # Soliton sector at θ = π (mod 2π): the model has two degenerate vacua v1, v2 whose
+    # background electric field sits near U1Irrep(n) and U1Irrep(n+1), with n = -1/2 - θ/2π.
+    # A soliton is a domain wall from v1 to v2 (a quasiparticle built on the two vacua as
+    # left/right backgrounds); the antisoliton is the reverse wall v2 → v1, built on the
+    # SAME vacuum objects so the two share backgrounds (e.g. for a soliton/antisoliton pair).
+    #
+    # `result[1]` is the vacuum pair `(v1, v2)`; for k ≥ 2, `result[k]` is the pair
+    # `(soliton, antisoliton)` of the (k-1)-th excitation.
+    if solitons
         isinf(hamiltonian.lattice.N) ||
             throw(ArgumentError("solitons are only available on an infinite lattice"))
         θ2π = hamiltonian.lattice.θ2π[1]
@@ -434,35 +492,49 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         Uc = length(spaces)
         ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:Uc])
         alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0)
-        ψa, envsa, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(U1Irrep(n),   Uc), attenuation), H, alg)
-        ψb, envsb, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(U1Irrep(n+1), Uc), attenuation), H, alg)
-        # :soliton runs from vacuum n to vacuum n+1; :antisoliton is the reverse
-        (ψL, envsL), (ψR, envsR) = solitons === :antisoliton ?
-            ((ψb, envsb), (ψa, envsa)) : ((ψa, envsa), (ψb, envsb))
+        # Solve the first vacuum (biased to background charge n by `attenuateLinks`), then obtain
+        # the second as its charge conjugate. Using C rather than a second independent VUMPS solve
+        # fixes the two vacua's relative phase, removing the soliton's phase ambiguity (and is
+        # cheaper). See `_charge_conjugate_vacuum`.
+        ψ1, envs1, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(U1Irrep(n), Uc), attenuation), H, alg)
+        ψ2 = _charge_conjugate_vacuum(ψ1, n)
+        envs2 = MPSKit.environments(ψ2, H)
 
-        gsL, gsR = MPSKitState(hamiltonian, ψL), MPSKitState(hamiltonian, ψR)
+        v1, v2 = MPSKitState(hamiltonian, ψ1), MPSKitState(hamiltonian, ψ2)
         # The two θ=π vacua must differ (opposite background fields, ±1/2). If `attenuateLinks`
         # failed to separate them, VUMPS lands on the same vacuum and the "soliton" is spurious.
-        isapprox(electricfields(gsL), electricfields(gsR); atol = 1e-3) &&
+        isapprox(electricfields(v1), electricfields(v2); atol = 1e-3) &&
             @warn "soliton vacua have nearly identical electric fields — attenuation did not select \
                    the two distinct θ=π vacua, so the soliton is likely spurious. Try a smaller \
                    `attenuation` (smaller = stronger)."
 
         result = Vector{Any}(undef, nstates)
-        result[1] = (gsL, gsR)
+        result[1] = (v1, v2)
         if nstates > 1
             isnothing(momentum) && (momentum = 0.0)
-            lattice_momentum = hamiltonian.lattice.a * momentum
-            _, psis = MPSKit.excitations(H, MPSKit.QuasiparticleAnsatz(), lattice_momentum,
-                                         ψL, envsL, ψR, envsR; num = nstates - 1)
+            islist = momentum isa AbstractVector
+            moms   = islist ? collect(momentum) : [momentum]
+            alg_qp = MPSKit.QuasiparticleAnsatz()
+            # For each requested momentum, solve the soliton band (domain wall v1 → v2) and the
+            # antisoliton band (the reverse v2 → v1). All are built on the SAME vacua, so any
+            # (soliton, antisoliton) pair — even at different momenta — shares backgrounds.
+            bands = map(moms) do mom
+                k_lat = hamiltonian.lattice.a * mom
+                _, sols  = MPSKit.excitations(H, alg_qp, k_lat, ψ1, envs1, ψ2, envs2; num = nstates - 1)
+                _, antis = MPSKit.excitations(H, alg_qp, k_lat, ψ2, envs2, ψ1, envs1; num = nstates - 1)
+                (sols, antis)
+            end
             for k in 2:nstates
-                result[k] = MPSKitQPState(hamiltonian, psis[k-1])
+                # one (soliton, antisoliton) pair per requested momentum
+                pairs = [(MPSKitQPState(hamiltonian, bands[mi][1][k-1]),
+                          MPSKitQPState(hamiltonian, bands[mi][2][k-1])) for mi in eachindex(moms)]
+                result[k] = islist ? pairs : pairs[1]
             end
         end
         return result
     end
 
-    states = Vector{Union{MPSKitState,MPSKitQPState}}(undef, nstates)
+    states = Vector{Any}(undef, nstates)   # entries may be a QP, or (for a momentum list) a list of QPs
     if isinf(hamiltonian.lattice.N)
         ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
         if abs(hamiltonian.lattice.θ2π[1] - 0.5) < 0.1
@@ -474,13 +546,16 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         
         if nstates > 1
             isnothing(momentum) && (momentum = 0.0)
-            algqp = MPSKit.QuasiparticleAnsatz()
-            # `momentum` is the physical momentum (units of the coupling g); MPSKit's
-            # excitation momentum is the dimensionless lattice momentum a·p (phase per site).
-            lattice_momentum = hamiltonian.lattice.a * momentum
-            _, psis = MPSKit.excitations(H, algqp, lattice_momentum, ψ, envs; num = nstates - 1)
+            islist = momentum isa AbstractVector
+            moms   = islist ? collect(momentum) : [momentum]
+            algqp  = MPSKit.QuasiparticleAnsatz()
+            # `momentum` is the physical momentum (units of the coupling g); MPSKit's excitation
+            # momentum is the dimensionless lattice momentum a·p (phase per site). A list of
+            # momenta returns, per excited band, a list of quasiparticles at those momenta.
+            bands = map(mom -> MPSKit.excitations(H, algqp, hamiltonian.lattice.a * mom, ψ, envs; num = nstates - 1)[2], moms)
             for n in 2:nstates
-                states[n] = MPSKitQPState(hamiltonian, psis[n-1])
+                qps = [MPSKitQPState(hamiltonian, bands[mi][n-1]) for mi in eachindex(moms)]
+                states[n] = islist ? qps : qps[1]
             end
         end
     else
@@ -1284,20 +1359,22 @@ end
 # accumulate-charge formula above cannot resolve the background field — it returns the same
 # value for the two θ=π vacua (and is unreliable in general). Measure ⟨L+θ⟩ on each link
 # directly from the bond instead, via `link_expectation` (as the energy-density code does).
+# This works for any MPS over an infinite lattice — the uniform `InfiniteMPS` vacua as well as
+# a finite window (`WindowMPS`/`FiniteMPS`) cut from one, e.g. an evolving wavepacket.
 function electricfields(state::MPSKitState)
     lat = lattice(state)
-    (isinf(lat.N) && state.psi isa MPSKit.InfiniteMPS) ||
-        return invoke(electricfields, Tuple{SchwingerState}, state)
-    u = state.hamiltonian.universe
-    return [real(link_expectation(state.psi, ℓ,
-                r::U1Irrep -> Float64(r.charge) + Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u))
-            for ℓ in 1:length(state.psi)]
+    isinf(lat.N) || return invoke(electricfields, Tuple{SchwingerState}, state)
+    u  = state.hamiltonian.universe
+    ψ  = state.psi
+    nrm2 = ψ isa MPSKit.InfiniteMPS ? 1.0 : real(dot(ψ, ψ))   # windows can drift from norm 1
+    return [real(link_expectation(ψ, ℓ,
+                r::U1Irrep -> Float64(r.charge) + Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u) / nrm2)
+            for ℓ in 1:length(ψ)]
 end
 
 function electricfield(state::MPSKitState, link::Int)
     lat = lattice(state)
-    (isinf(lat.N) && state.psi isa MPSKit.InfiniteMPS) ||
-        return invoke(electricfield, Tuple{SchwingerState,Int}, state, link)
+    isinf(lat.N) || return invoke(electricfield, Tuple{SchwingerState,Int}, state, link)
     return electricfields(state)[mod1(link, length(state.psi))]
 end
 
