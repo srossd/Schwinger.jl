@@ -398,24 +398,29 @@ end
 
 
 """
-`_charge_conjugate_vacuum(psi, n)`
+`_reflect_vacuum(psi, n)`
 
-Charge-conjugate a θ=π vacuum `InfiniteMPS`, returning the other degenerate vacuum.
+Spatial-parity reflection of a θ=π vacuum `InfiniteMPS`, returning the other degenerate vacuum.
 
-At θ = π the model has two degenerate vacua with background bond charge `n` and `n+1`. Charge
-conjugation `C` exchanges them; on the lattice it is a one-site translation together with the
-charge map (virtual `q → -q + (2n+1)`, physical `q → -q`) and complex conjugation of the tensor
-data. It is implemented by remapping fusion channels: for each native fusion tree of the target
-tensor, the (conjugated) data block of the matching source channel — identified by its coupled
-(flux) charge, which is independent of the dual-leg convention — is copied in.
+At θ = π the model has two degenerate vacua with background bond charge `n` and `n+1`, related by
+parity. On the lattice the reflection is a one-site translation (sublattice swap) together with
+the charge map (virtual `q → -q + (2n+1)`, physical `q → -q`). Crucially it is a **unitary**
+operation — the tensor data is copied, NOT complex-conjugated. (Charge conjugation `C` is the same
+charge map but antiunitary, i.e. with complex conjugation; that breaks the k → -k symmetry of the
+soliton, giving a lopsided dispersion, so we use the unitary reflection instead.)
 
-Building `v2 = C(v1)` instead of solving the second vacuum independently fixes the two vacua's
-relative phase (removing the soliton's phase ambiguity) and avoids a second VUMPS solve.
+Implemented by remapping fusion channels: for each native fusion tree of the target tensor, the
+data block of the matching source channel — identified by its coupled (flux) charge, which is
+independent of the dual-leg convention — is copied in.
+
+Building `v2 = P(v1)` instead of solving the second vacuum independently fixes the two vacua's
+relative phase (removing the soliton's phase ambiguity), gives a symmetric soliton dispersion with
+its minimum at k=0, and avoids a second VUMPS solve.
 """
-function _charge_conjugate_vacuum(psi::MPSKit.InfiniteMPS, n::Int)
+function _reflect_vacuum(psi::MPSKit.InfiniteMPS, n::Int)
     Uc    = length(psi)
     shift = 2n + 1                        # virtual: q → -q + shift ;  physical: q → -q
-    function cc(A)
+    function reflect(A)
         vLs, phs, vRs = TensorKit.space(A, 1), TensorKit.space(A, 2), TensorKit.space(A, 3)
         newvL = U1Space((U1Irrep(-c.charge + shift) => TensorKit.dim(vLs, c) for c in TensorKit.sectors(vLs))...)
         newph = U1Space((U1Irrep(-c.charge)         => TensorKit.dim(phs, c) for c in TensorKit.sectors(phs))...)
@@ -429,20 +434,14 @@ function _charge_conjugate_vacuum(psi::MPSKit.InfiniteMPS, n::Int)
         end
         for (f1, f2) in TensorKit.fusiontrees(A)
             key = (-f1.coupled.charge + shift, -f1.uncoupled[1].charge + shift, -f1.uncoupled[2].charge)
-            haskey(targets, key) || error("_charge_conjugate_vacuum: unmatched fusion channel $key")
+            haskey(targets, key) || error("_reflect_vacuum: unmatched fusion channel $key")
             g1, g2 = targets[key]
-            B[g1, g2] = conj.(A[f1, f2])
+            B[g1, g2] = copy(A[f1, f2])   # unitary reflection: copy, do NOT conjugate
         end
         return B
     end
-    # one-site translation (sublattice swap) composed with the per-site charge conjugation
-    newAL = [cc(psi.AL[mod1(i + 1, Uc)]) for i in 1:Uc]
-    # The one-site translation leaves a relative phase between the two sublattices that shifts
-    # the soliton momentum by π/2 (folding the dispersion minimum to k=π/2). A factor of -1 on
-    # one unit-cell tensor (a π/2 per-cell shift, since the per-cell shift is half the per-tensor
-    # phase) cancels it, putting the soliton dispersion minimum back at k=0.
-    newAL[1] = -newAL[1]
-    return MPSKit.InfiniteMPS(newAL)
+    # one-site translation (sublattice swap) composed with the per-site reflection
+    return MPSKit.InfiniteMPS([reflect(psi.AL[mod1(i + 1, Uc)]) for i in 1:Uc])
 end
 
 
@@ -460,6 +459,9 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
   lattice. May be a single value or a **list** of momenta. With a single value, each excited
   entry of the result is one quasiparticle; with a list, each excited entry is a list of
   quasiparticles at those momenta (so they can be combined into multi-particle states).
+- `svdcut::Bool` (default `true`): on an infinite lattice, adapt the VUMPS bond dimension each
+  iteration via a two-site SVD update (`VUMPSSvdCut`) truncated at relative tolerance `cutoff`,
+  growing from `initiallinkdim`. Set `false` to run VUMPS at the fixed `initiallinkdim` instead.
 - `solitons::Bool`: on an infinite θ=π lattice, return θ=π domain-wall (soliton) states.
   `result[1]` is the vacuum pair `(v1, v2)`; for `k ≥ 2`, `result[k]` is the `(soliton,
   antisoliton)` pair of the (k-1)-th band — or, for a momentum list, a list of such pairs (one
@@ -467,7 +469,7 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     maxiters::Int = 500, initiallinkdim::Int = 10, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing, AbstractVector} = nothing,
-    solitons::Bool = false, attenuation::Real = 1e-3)
+    solitons::Bool = false, attenuation::Real = 1e-3, svdcut::Bool = true)
 
     initiallinkdim = something(bonddim, initiallinkdim)   # `bonddim` is an alias
 
@@ -475,11 +477,13 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     spaces = get_mpskit_spaces(hamiltonian.lattice)   # defect sites are added in the finite branch
     total_defect = sum(d.charge for d in hamiltonian.defects; init = 0)
 
-    # VUMPS finalizer: after each iteration, adapt the virtual spaces with a two-site SVD update
-    # (`VUMPSSvdCut`), truncating singular values at relative tolerance `cutoff`. Starting from the
-    # small `initiallinkdim`, this lets the bond dimension grow to whatever the state needs.
-    vumps_finalize = (it, st, op, ev) ->
-        MPSKit.changebonds(st, op, MPSKit.VUMPSSvdCut(; trscheme = trunctol(; rtol = cutoff)), ev)
+    # VUMPS finalizer: with `svdcut`, after each iteration adapt the virtual spaces with a two-site
+    # SVD update (`VUMPSSvdCut`), truncating singular values at relative tolerance `cutoff` — so the
+    # bond dimension grows from the small `initiallinkdim` to whatever the state needs. With
+    # `svdcut = false`, the finalizer is a no-op and VUMPS runs at the fixed `initiallinkdim`.
+    vumps_finalize = svdcut ?
+        ((it, st, op, ev) -> MPSKit.changebonds(st, op, MPSKit.VUMPSSvdCut(; trscheme = trunctol(; rtol = cutoff)), ev)) :
+        ((it, st, op, ev) -> (st, ev))
 
     # Soliton sector at θ = π (mod 2π): the model has two degenerate vacua v1, v2 whose
     # background electric field sits near U1Irrep(n) and U1Irrep(n+1), with n = -1/2 - θ/2π.
@@ -501,11 +505,11 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:Uc])
         alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0, finalize = vumps_finalize)
         # Solve the first vacuum (biased to background charge n by `attenuateLinks`), then obtain
-        # the second as its charge conjugate. Using C rather than a second independent VUMPS solve
-        # fixes the two vacua's relative phase, removing the soliton's phase ambiguity (and is
-        # cheaper). See `_charge_conjugate_vacuum`.
+        # the second as its parity reflection. Using P rather than a second independent VUMPS solve
+        # fixes the two vacua's relative phase (removing the soliton's phase ambiguity), gives a
+        # symmetric soliton dispersion (min at k=0), and is cheaper. See `_reflect_vacuum`.
         ψ1, envs1, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(U1Irrep(n), Uc), attenuation), H, alg)
-        ψ2 = _charge_conjugate_vacuum(ψ1, n)
+        ψ2 = _reflect_vacuum(ψ1, n)
         envs2 = MPSKit.environments(ψ2, H)
 
         v1, v2 = MPSKitState(hamiltonian, ψ1), MPSKitState(hamiltonian, ψ2)
