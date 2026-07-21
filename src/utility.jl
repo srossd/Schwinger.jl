@@ -111,10 +111,11 @@ end
 Create TensorKit vector spaces for MPSKit MPS/MPO construction.
 Returns a vector of physical spaces for each site.
 """
-@memoize function get_mpskit_spaces(lattice::Lattice) 
+@memoize function get_mpskit_spaces(lattice::Lattice)
     if lattice.periodic
         throw(ArgumentError("MPSKit backend not implemented for periodic lattices"))
     end
+    lattice.flavor_sym && return _flavorsym_spaces(lattice)
 
     # Spin-1/2 physical space (for fermions)
     N, F, q = lattice.N, lattice.F, lattice.q

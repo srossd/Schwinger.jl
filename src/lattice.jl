@@ -92,13 +92,18 @@ struct Lattice
     mlat::AbstractVector{AbstractVector{Float64}}
     mprime::AbstractVector{AbstractVector{Float64}}
 
+    # opt-in: gauge the global SU(F) flavor symmetry into the MPS (equal-mass flavors,
+    # MPSKit backend only). All F flavors live on one physical site as SU(F) multiplets.
+    flavor_sym::Bool
+
     function Lattice(N::Union{Real,Type{<:Real}}; F::Int = 1,
-        q::Int = 1, periodic::Bool=false, 
-        L::Union{Nothing,Real}=nothing, a::Union{Nothing,Real}=nothing, 
-        m::Union{Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=0., 
-        mlat::Union{Nothing,Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=nothing, 
-        mprime::Union{Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=0., 
-        θ2π::Union{Real,AbstractVector{<:Real}}=0.)
+        q::Int = 1, periodic::Bool=false,
+        L::Union{Nothing,Real}=nothing, a::Union{Nothing,Real}=nothing,
+        m::Union{Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=0.,
+        mlat::Union{Nothing,Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=nothing,
+        mprime::Union{Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=0.,
+        θ2π::Union{Real,AbstractVector{<:Real}}=0.,
+        flavor_sym::Bool=false)
 
         # Convert N to LatticeSize
         N = LatticeSize(N)
@@ -111,6 +116,10 @@ struct Lattice
         end
         if F < 1
             throw(DomainError(F, "Number of flavors must be ≥ 1."))
+        end
+        if flavor_sym
+            F < 2 && throw(ArgumentError("flavor_sym requires F ≥ 2 flavors."))
+            periodic && throw(ArgumentError("flavor_sym is not supported for periodic lattices."))
         end
         if q < 1
             throw(DomainError(q, "Charge must be ≥ 1."))
@@ -199,7 +208,7 @@ struct Lattice
 
         # Process mprime
         mprime = process_mass_param(mprime, "mprime")
-        new(N, F, q, periodic, a, L, θ2π, m, mlat, mprime)
+        new(N, F, q, periodic, a, L, θ2π, m, mlat, mprime, flavor_sym)
     end
 end
 

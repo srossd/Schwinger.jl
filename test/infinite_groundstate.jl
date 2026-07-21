@@ -59,3 +59,11 @@ using ProgressMeter
         @test isapprox(ent_inf, ent_finite[middle_idxs]; rtol=tol)
     end
 end
+# Regression: the multi-flavor (F > 1) infinite MPO must build. Previously the hopping
+# pass-through channels used bare Numbers, leaving virtual spaces undeducible by
+# InfiniteMPOHamiltonian (F = 1 has no pass-throughs, so only F > 1 was affected).
+@testset "F > 1 infinite Hamiltonian builds" begin
+    for F in (2, 3)
+        @test Hamiltonian(Lattice(Inf; F=F, m=1.0); backend=:MPSKit) isa MPSKitOperator
+    end
+end

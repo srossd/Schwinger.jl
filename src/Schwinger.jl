@@ -33,6 +33,7 @@ export EDAverageElectricField, ITensorAverageElectricField, MPSKitAverageElectri
 # State operations
 export lattice
 export loweststates, groundstate, energygap
+export flavor_singlet, flavor_adjoint
 export wavepacket, reflection_symmetric_gauge
 export expectation, act
 export evolve
@@ -52,6 +53,7 @@ using Observers
 # MPSKit and TensorKit
 using MPSKit, MPSKitLEMPO
 using TensorKit
+using SUNRepresentations
 
 # Numerical libraries
 using Arpack
@@ -77,6 +79,7 @@ include("./operators.jl")
 include("./utility.jl")
 include("./states.jl")
 include("./hamiltonian.jl")
+include("./flavor_symmetry.jl")
 include("./wavepacket.jl")
 include("./wilson.jl")
 include("./average_electric_field.jl")

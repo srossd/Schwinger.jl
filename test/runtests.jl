@@ -29,6 +29,10 @@ using Test
     @testset "Energy densities" begin
         include("energy_density.jl")
     end
+
+    @testset "Flavor symmetry" begin
+        include("flavor_symmetry.jl")
+    end
 end
 
 @testset "Time evolution tests" begin

@@ -578,6 +578,14 @@ function matrices_hopping(lattice::Lattice)
     Elt = Union{Missing, typeof(hopleftevenL), scalartype(hopleftevenL)}
     A = Vector{Matrix{Elt}}(undef, (isinf(N) ? 2 : Int(N))*F)
 
+    # A hopping channel for flavor f stays open across the F−1 sites of the other flavors of the
+    # same staggered site. Represent that pass-through as an explicit identity MPO tensor carrying
+    # the channel's ±q charge, not a bare `1.0`: a Number leaves the channel's virtual space
+    # undetermined, which InfiniteMPOHamiltonian's space-deduction can't resolve (it hits
+    # `missing == missing`). Only matters for F > 1 infinite lattices — F = 1 has no pass-throughs,
+    # and finite lattices anchor the virtual spaces at their boundary vectors.
+    passthrough(P, qs) = ones(U1Space(qs => 1) ⊗ P ← P ⊗ U1Space(qs => 1))
+
     for n in 1:(isinf(N) ? 2 : Int(N))*F
         W = Matrix{Elt}(missing, 2 + 2*F, 2 + 2*F)
         W[1, 1] = 1.0
@@ -585,29 +593,24 @@ function matrices_hopping(lattice::Lattice)
 
         site_ind = 1 + ((n - 1) ÷ F)
         flavor_ind = mod(n - 1, F) + 1
+        Psite = isodd(site_ind) ? oddspace : evenspace
 
         if isodd(site_ind)
             W[1, 1 + 2*(flavor_ind - 1) + 1] = 1/(2*lattice.a) * hopleftoddL
             W[1, 1 + 2*(flavor_ind - 1) + 2] = 1/(2*lattice.a) * hoprightoddL
             W[1 + 2*(flavor_ind - 1) + 1, end] = hopleftoddR
             W[1 + 2*(flavor_ind - 1) + 2, end] = hoprightoddR
-
-            for j=1:F
-                j == flavor_ind && continue
-                W[1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = 1.0
-                W[1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = 1.0
-            end
         else
             W[1, 1 + 2*(flavor_ind - 1) + 1] = 1/(2*lattice.a) * hopleftevenL
             W[1, 1 + 2*(flavor_ind - 1) + 2] = 1/(2*lattice.a) * hoprightevenL
             W[1 + 2*(flavor_ind - 1) + 1, end] = hopleftevenR
             W[1 + 2*(flavor_ind - 1) + 2, end] = hoprightevenR
+        end
 
-            for j=1:F
-                j == flavor_ind && continue
-                W[1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = 1.0
-                W[1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = 1.0
-            end
+        for j=1:F
+            j == flavor_ind && continue
+            W[1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = passthrough(Psite,  lattice.q)
+            W[1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = passthrough(Psite, -lattice.q)
         end
 
         A[n] = W
@@ -867,6 +870,7 @@ Computes the MPSKit Hamiltonian for the Schwinger model.
 """
 @memoize function MPSKitHamiltonian(lattice::Lattice; universe::Int = 0,
                                     defects::Vector{DefectCharge} = DefectCharge[])
+    lattice.flavor_sym && return _flavorsym_hamiltonian(lattice; universe = universe, defects = defects)
     isinf(lattice.N) && !isempty(defects) &&
         throw(ArgumentError("defects are not supported for infinite lattices"))
 

@@ -196,8 +196,11 @@ struct MPSKitState <: SchwingerState
         elseif psi isa WindowMPS
             isinf(hamiltonian.lattice) || throw(ArgumentError("WindowMPS requires an infinite-lattice Hamiltonian"))
         else  # FiniteMPS: a finite lattice, or a finite window on an infinite background
+            # flavor_sym uses one physical site per staggered site (F flavors fused); the
+            # default representation uses F sites per staggered site.
+            sites_per_stagger = hamiltonian.lattice.flavor_sym ? 1 : hamiltonian.lattice.F
             isinf(hamiltonian.lattice) ||
-                length(psi) == Int(hamiltonian.lattice.N) * hamiltonian.lattice.F + length(defects) ||
+                length(psi) == Int(hamiltonian.lattice.N) * sites_per_stagger + length(defects) ||
                 throw(ArgumentError("State length does not match Hamiltonian lattice size"))
         end
         new(hamiltonian, psi, defects)
@@ -469,9 +472,21 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     maxiters::Int = 500, initiallinkdim::Int = 10, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing, AbstractVector} = nothing,
-    solitons::Bool = false, attenuation::Real = 1e-3, svdcut::Bool = true)
+    solitons::Bool = false, attenuation::Real = 1e-3, svdcut::Bool = true, flavor_irrep = nothing)
 
     initiallinkdim = something(bonddim, initiallinkdim)   # `bonddim` is an alias
+
+    # `flavor_irrep` targets the excitations at a chosen SU(F) flavor sector (e.g.
+    # `flavor_singlet`/`flavor_adjoint`). Requires a flavor_sym lattice; works on infinite
+    # (via the QP-ansatz `sector`) and finite (via sector-selective DMRG) chains.
+    if flavor_irrep !== nothing
+        hamiltonian.lattice.flavor_sym ||
+            throw(ArgumentError("flavor_irrep requires a flavor_sym lattice"))
+        solitons &&
+            throw(ArgumentError("flavor_irrep is not supported with solitons"))
+    end
+    exci_kw = flavor_irrep === nothing ? (;) :
+              (; sector = _flavorsym_excitation_sector(hamiltonian.lattice, flavor_irrep))
 
     H = hamiltonian.lempo
     spaces = get_mpskit_spaces(hamiltonian.lattice)   # defect sites are added in the finite branch
@@ -496,6 +511,8 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     if solitons
         isinf(hamiltonian.lattice.N) ||
             throw(ArgumentError("solitons are only available on an infinite lattice"))
+        hamiltonian.lattice.flavor_sym &&
+            throw(ArgumentError("solitons are not supported with flavor_sym"))
         θ2π = hamiltonian.lattice.θ2π[1]
         isapprox(mod(θ2π, 1.0), 0.5; atol = 1e-8) ||
             throw(ArgumentError("solitons require θ = π (mod 2π), i.e. θ2π ≡ 1/2 (mod 1); got θ2π = $θ2π"))
@@ -548,8 +565,8 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
 
     states = Vector{Any}(undef, nstates)   # entries may be a QP, or (for a momentum list) a list of QPs
     if isinf(hamiltonian.lattice.N)
-        ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
-        if abs(hamiltonian.lattice.θ2π[1] - 0.5) < 0.1
+        ψ₀ = MPSKit.InfiniteMPS(spaces, [_mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
+        if !hamiltonian.lattice.flavor_sym && abs(hamiltonian.lattice.θ2π[1] - 0.5) < 0.1
             ψ₀ = attenuateLinks(ψ₀, hamiltonian.lattice.θ2π[1] < 0.5 ? [U1Irrep(0), U1Irrep(0)] : [U1Irrep(-1), U1Irrep(-1)], 0.01)
         end
         alg = MPSKit.VUMPS(; maxiter=maxiters, tol=energy_tol, verbosity=verbose ? 1 : 0, finalize = vumps_finalize)
@@ -564,7 +581,7 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
             # `momentum` is the physical momentum (units of the coupling g); MPSKit's excitation
             # momentum is the dimensionless lattice momentum a·p (phase per site). A list of
             # momenta returns, per excited band, a list of quasiparticles at those momenta.
-            bands = map(mom -> MPSKit.excitations(H, algqp, hamiltonian.lattice.a * mom, ψ, envs; num = nstates - 1)[2], moms)
+            bands = map(mom -> MPSKit.excitations(H, algqp, hamiltonian.lattice.a * mom, ψ, envs; num = nstates - 1, exci_kw...)[2], moms)
             for n in 2:nstates
                 qps = [MPSKitQPState(hamiltonian, bands[mi][n-1]) for mi in eachindex(moms)]
                 states[n] = islist ? qps : qps[1]
@@ -585,17 +602,41 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
             end
             split = ψ -> _split_defect_mps(ψ, lat, hamiltonian.defects)
         end
-        ψ₀ = MPSKit.FiniteMPS(rand, ComplexF64, spc, U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]); right = U1Space(total_defect => 1))
+        ψ₀ = MPSKit.FiniteMPS(rand, ComplexF64, spc, _mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax); right = _mpskit_right_space(hamiltonian.lattice, total_defect))
         alg = MPSKit.DMRG2(; maxiter=maxiters, tol=energy_tol, trscheme = trunctol(; rtol = cutoff), verbosity=verbose ? 1 : 0)
         ψ, = MPSKit.find_groundstate(ψ₀, Huse, alg)
         states[1] = MPSKitState(hamiltonian, split(ψ), hamiltonian.defects)
 
         if nstates > 1
             isnothing(momentum) || throw(ArgumentError("Momentum-resolved excitations not supported for finite lattices"))
-            alg2 = MPSKit.FiniteExcited(alg, weight)
-            _, psis = MPSKit.excitations(Huse, alg2, (ψ,); num = nstates - 1)
-            for n in 2:nstates
-                states[n] = MPSKitState(hamiltonian, split(psis[n-1]), hamiltonian.defects)
+            if flavor_irrep === nothing
+                alg2 = MPSKit.FiniteExcited(alg, weight)
+                _, psis = MPSKit.excitations(Huse, alg2, (ψ,); num = nstates - 1)
+                for n in 2:nstates
+                    states[n] = MPSKitState(hamiltonian, split(psis[n-1]), hamiltonian.defects)
+                end
+            elseif flavor_irrep == _flavor_irrep(hamiltonian.lattice.F, 0)
+                # Singlet channel: the GS is already the lowest singlet, so its excitations
+                # (which stay in the singlet sector) come from FiniteExcited penalizing the GS.
+                _, psis = MPSKit.excitations(Huse, MPSKit.FiniteExcited(alg, weight), (ψ,); num = nstates - 1)
+                for n in 2:nstates
+                    states[n] = MPSKitState(hamiltonian, split(psis[n-1]), hamiltonian.defects)
+                end
+            else
+                # Non-singlet channel: the lowest state in the (0, R) sector is itself an
+                # excitation above the singlet GS. Target it by pinning the global sector to
+                # (0, R) via the right boundary; higher R-states then via FiniteExcited in R.
+                rightR = _mpskit_right_space(hamiltonian.lattice, total_defect, flavor_irrep)
+                ψR0 = MPSKit.FiniteMPS(rand, ComplexF64, spc,
+                        _mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax); right = rightR)
+                ψR, = MPSKit.find_groundstate(ψR0, Huse, alg)
+                states[2] = MPSKitState(hamiltonian, split(ψR), hamiltonian.defects)
+                if nstates > 2
+                    _, psisR = MPSKit.excitations(Huse, MPSKit.FiniteExcited(alg, weight), (ψR,); num = nstates - 2)
+                    for n in 3:nstates
+                        states[n] = MPSKitState(hamiltonian, split(psisR[n-2]), hamiltonian.defects)
+                    end
+                end
             end
         end
     end
@@ -861,6 +902,10 @@ function _averaged_bond(b, site::Int, N::Int, boundary::Bool)
 end
 
 function energy_density(state::Union{EDState,ITensorState,MPSKitState}, site::Int)
+    if state isa MPSKitState && lattice(state).flavor_sym
+        throw(ArgumentError("per-site energy_density is not yet implemented for flavor_sym lattices; " *
+                            "use energy(state) for the total energy"))
+    end
     if state isa MPSKitState && _isfinitewindow(state)
         return _energy_densities_window(state)[site]   # wavepacket on an infinite background
     end
@@ -1016,8 +1061,24 @@ Return the expectations of χ†χ operators of each flavor on a given site.
 - `state::MPSKitState`: Schwinger model state.
 - `site::Int`: the lattice site.
 """
+# flavor_sym: one number per staggered site — the (common) per-flavor occupation ⟨n_f⟩ = ⟨N_site⟩/F.
+function _flavorsym_occupations(state::MPSKitState)
+    lat = state.hamiltonian.lattice
+    psi = state.psi
+    N = isinf(lat.N) ? 2 : Int(lat.N)
+    norm2 = real(MPSKit.dot(psi, psi))
+    return [real(MPSKit.contract_mpo_expval1(psi.AC[j], _flavorsym_number_op(lat, j), psi.AC[j])) /
+            norm2 / lat.F for j in 1:N]
+end
+
 function occupation(state::MPSKitState, site::Int)
     N, F = state.hamiltonian.lattice.N, state.hamiltonian.lattice.F
+    if state.hamiltonian.lattice.flavor_sym
+        occ = _flavorsym_occupations(state)
+        n = isinf(N) ? (iseven(site) ? 2 : 1) : (1 ≤ site ≤ length(occ) ? site :
+                throw(ArgumentError("Site must be between 1 and $(length(occ))")))
+        return occ[n]
+    end
     psi = state.psi
     if _isfinitewindow(state)
         N_sites = length(psi) ÷ F
@@ -1055,6 +1116,7 @@ Return an NxF matrix of the expectations of χ†χ operators on each site.
 """
 function occupations(state::MPSKitState)
     lat = state.hamiltonian.lattice
+    lat.flavor_sym && return _flavorsym_occupations(state)
     defects = state.defects
     N, F = lat.N, lat.F
     psi = state.psi
@@ -1163,7 +1225,8 @@ function scalardensity(state::SchwingerState, site::Int)
     N = isinf(N) ? 2 : Int(N)
     before = site == 1 ? N : site - 1
     after = site == N ? 1 : site + 1
-    occs = sum(occupations(state), dims=2)
+    occs = (state isa MPSKitState && lattice(state).flavor_sym) ?
+           (lattice(state).F .* occupations(state)) : sum(occupations(state), dims=2)
     return 1/(lattice(state).a)*((-1)^(before) * occs[before]/4 + (-1)^site * occs[site]/2 + (-1)^(after) * occs[after]/4)
 end
 
@@ -1277,10 +1340,13 @@ Return a list of the expectations of Q operators on each site.
 - `state::SchwingerState`: Schwinger model state.
 """
 function charges(state::SchwingerState)
-    F    = lattice(state).F
-    occs = occupations(state)
-    N    = size(occs, 1)
-    return (sum(occs, dims=2) + (F .* [-1/2 + (-1)^(n)/2 for n=1:N])) .* lattice(state).q
+    F = lattice(state).F
+    # total fermion number per staggered site: default sums the F flavors; flavor_sym has one
+    # per-flavor number so multiply by F. The staggered half-filling background is F/2 per site.
+    tot = (state isa MPSKitState && lattice(state).flavor_sym) ?
+          (F .* occupations(state)) : sum(occupations(state), dims=2)
+    N = size(tot, 1)
+    return (tot + (F .* [-1/2 + (-1)^(n)/2 for n=1:N])) .* lattice(state).q
 end
 
 """
@@ -1379,8 +1445,10 @@ function electricfields(state::MPSKitState)
     u  = state.hamiltonian.universe
     ψ  = state.psi
     nrm2 = ψ isa MPSKit.InfiniteMPS ? 1.0 : real(dot(ψ, ψ))   # windows can drift from norm 1
+    # flavor_sym bonds carry a U(1)×SU(F) product charge; read the U(1) part via r[1].
+    bondcharge = lat.flavor_sym ? (r -> Float64(r[1].charge)) : (r -> Float64(r.charge))
     return [real(link_expectation(ψ, ℓ,
-                r::U1Irrep -> Float64(r.charge) + Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u) / nrm2)
+                r -> bondcharge(r) + Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u) / nrm2)
             for ℓ in 1:length(ψ)]
 end
 
@@ -1471,11 +1539,11 @@ Return the von Neumann entanglement entropy -tr(ρₐ log(ρₐ)), where a is th
 - `bisection::Int`: bisection index.
 """
 function entanglement(state::MPSKitState, bisection::Int)
-    F = lattice(state).F
+    lat = lattice(state)
     psi = state.psi
-    # Get the entanglement entropy at the bond after site bisection*F
-    # MPSKit provides entanglement_entropy function
-    bond_idx = bisection * F
+    # Entanglement entropy at the bond after staggered site `bisection`. The default
+    # representation has F physical sites per staggered site; flavor_sym has one.
+    bond_idx = bisection * (lat.flavor_sym ? 1 : lat.F)
     return MPSKit.entropy(psi, bond_idx)
 end
 

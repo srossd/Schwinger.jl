@@ -43,7 +43,7 @@ function _lattice_with_defects(lattice::Lattice, defects)
     mlatmat   = permutedims(reduce(hcat, lattice.mlat))     # N×F
     mprimemat = permutedims(reduce(hcat, lattice.mprime))   # N×F
     return Lattice(N; F=lattice.F, q=lattice.q, periodic=lattice.periodic,
-                   a=lattice.a, mlat=mlatmat, mprime=mprimemat, θ2π=θ)
+                   a=lattice.a, mlat=mlatmat, mprime=mprimemat, θ2π=θ, flavor_sym=lattice.flavor_sym)
 end
 
 # MPSKit chain index of matter (physical) site `j`, flavor `k`, accounting for
