@@ -33,3 +33,6 @@ Manifest.toml
 *.synctex.gz
 
 *.ipynb
+
+examples/
+.orchestrator.toml

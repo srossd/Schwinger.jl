@@ -53,6 +53,36 @@ plot(x[2:63], ed[2:63]; xlabel = L"x", ylabel = "Energy density above vacuum",
      legend = false, title = "Quasiparticle wavepacket (m = 0, ag = 0.5, p = 1.0g)")
 ```
 
+## Flavor multiplets
+
+For ``F \geq 2`` flavors of equal mass, the model has a global ``SU(F)`` flavor symmetry, and its excitations organize into ``SU(F)`` multiplets. Passing `flavor_sym = true` to `Lattice` gauges this symmetry into the MPS (on the `MPSKit` backend), which lets us label an excitation by its flavor irrep and target a chosen channel with the `flavor_irrep` keyword of `loweststates`. For two flavors, the mesons split into an ``SU(2)`` singlet and a triplet (`flavor_singlet` and `flavor_adjoint`), and at $m/g = 1$ the triplet is the lighter one.
+
+We can see the triplet *without* any knowledge of the symmetry: exact diagonalization represents the two flavors explicitly, yet the lowest excitation comes out three-fold degenerate — an isotriplet — sitting just below a non-degenerate isosinglet.
+```@example flavor
+using Schwinger
+N, m, a = 8, 1.0, 1.0
+
+# ED knows nothing about SU(2); the flavors are separate sites
+Eed = sort!([real(energy(s)) for s in
+             loweststates(Hamiltonian(Lattice(N; F = 2, m = m, a = a); backend = :ED), 6)])
+round.(Eed .- Eed[1]; digits = 6)   # gaps above the ground state
+```
+The first three gaps are equal: the lightest excitation is a triplet. Turning on `flavor_sym` lets us confirm this labelling directly. We target the adjoint (the ``SU(2)`` triplet, an irrep of dimension three) and singlet channels separately with `flavor_irrep`; the triplet is lighter, and its energy matches the ED value.
+```@example flavor
+latf = Lattice(N; F = 2, m = m, a = a, flavor_sym = true)
+Hf = Hamiltonian(latf; backend = :MPSKit)
+
+E_triplet = real(energy(loweststates(Hf, 2; flavor_irrep = flavor_adjoint(latf),
+                                     energy_tol = 1e-10, bonddim = 24)[2]))
+E_singlet = real(energy(loweststates(Hf, 2; flavor_irrep = flavor_singlet(latf),
+                                     energy_tol = 1e-10, bonddim = 24)[2]))
+
+(E_triplet = round(E_triplet - Eed[1]; digits = 6),
+ E_singlet = round(E_singlet - Eed[1]; digits = 6),
+ triplet_matches_ED = isapprox(E_triplet, Eed[2]; atol = 1e-5),
+ triplet_lighter = E_triplet < E_singlet)
+```
+
 Several other useful functions are detailed below.
 
 ```@docs
@@ -77,4 +107,6 @@ scalardensities
 pseudoscalar
 pseudoscalardensity
 pseudoscalardensities
+flavor_singlet
+flavor_adjoint
 ```

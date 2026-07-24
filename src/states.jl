@@ -401,26 +401,33 @@ end
 
 
 """
-`_reflect_vacuum(psi, n)`
+`_reflect_vacuum(psi, n, sites_per_stagger)`
 
-Spatial-parity reflection of a θ=π vacuum `InfiniteMPS`, returning the other degenerate vacuum.
+Reflection of a θ=π vacuum `InfiniteMPS`, returning the other degenerate vacuum.
 
-At θ = π the model has two degenerate vacua with background bond charge `n` and `n+1`, related by
-parity. On the lattice the reflection is a one-site translation (sublattice swap) together with
-the charge map (virtual `q → -q + (2n+1)`, physical `q → -q`). Crucially it is a **unitary**
-operation — the tensor data is copied, NOT complex-conjugated. (Charge conjugation `C` is the same
-charge map but antiunitary, i.e. with complex conjugation; that breaks the k → -k symmetry of the
-soliton, giving a lopsided dispersion, so we use the unitary reflection instead.)
+At θ = π the model has two degenerate vacua with background bond charge `n` and `n+1`. On the
+staggered lattice the map between them is a **one-site (staggered) translation** — the operation
+underlying charge conjugation, which swaps the two sublattices — composed with the charge map
+(virtual `q → -q + (2n+1)`, physical `q → -q`). One staggered site spans `sites_per_stagger`
+MPSKit sites (`= 1` for `flavor_sym`, `= F` for the default per-flavor layout), so the sublattice
+swap is a shift by `sites_per_stagger`, NOT a fixed one MPSKit site (the F=1 special case). The
+tensor data is copied, NOT complex-conjugated (the transformation stays unitary, which keeps the
+soliton's k → -k symmetry and a dispersion minimum at k=0).
 
 Implemented by remapping fusion channels: for each native fusion tree of the target tensor, the
 data block of the matching source channel — identified by its coupled (flux) charge, which is
 independent of the dual-leg convention — is copied in.
 
-Building `v2 = P(v1)` instead of solving the second vacuum independently fixes the two vacua's
-relative phase (removing the soliton's phase ambiguity), gives a symmetric soliton dispersion with
-its minimum at k=0, and avoids a second VUMPS solve.
+Building `v2` from `v1` this way (rather than a second independent VUMPS solve) fixes the two
+vacua's relative phase, removing the soliton's phase ambiguity, and is cheaper.
+
+NOTE: this pure charge relabelling is correct for the default (per-flavor U(1)) layout. It does
+NOT work for `flavor_sym`: there every bond obeys the n-ality `c ≡ nality(R) mod F`, and the two
+vacua differ by one unit of background charge = one fundamental of SU(F) (odd n-ality), so they
+live in different flavor sectors and no charge relabelling connects them (the soliton domain wall
+carries a fundamental). `flavor_sym` solitons are handled separately / not yet supported.
 """
-function _reflect_vacuum(psi::MPSKit.InfiniteMPS, n::Int)
+function _reflect_vacuum(psi::MPSKit.InfiniteMPS, n::Int, sites_per_stagger::Int = 1)
     Uc    = length(psi)
     shift = 2n + 1                        # virtual: q → -q + shift ;  physical: q → -q
     function reflect(A)
@@ -443,8 +450,8 @@ function _reflect_vacuum(psi::MPSKit.InfiniteMPS, n::Int)
         end
         return B
     end
-    # one-site translation (sublattice swap) composed with the per-site reflection
-    return MPSKit.InfiniteMPS([reflect(psi.AL[mod1(i + 1, Uc)]) for i in 1:Uc])
+    # one staggered-site translation (sublattice swap) composed with the per-site reflection
+    return MPSKit.InfiniteMPS([reflect(psi.AL[mod1(i + sites_per_stagger, Uc)]) for i in 1:Uc])
 end
 
 
@@ -468,7 +475,11 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 - `solitons::Bool`: on an infinite θ=π lattice, return θ=π domain-wall (soliton) states.
   `result[1]` is the vacuum pair `(v1, v2)`; for `k ≥ 2`, `result[k]` is the `(soliton,
   antisoliton)` pair of the (k-1)-th band — or, for a momentum list, a list of such pairs (one
-  per momentum), all built on the same vacua so any pair shares backgrounds.
+  per momentum), all built on the same vacua so any pair shares backgrounds. Works with
+  `flavor_sym` too (the soliton is then a flavor multiplet), but note: with `flavor_sym` the two
+  vacua are solved independently (they differ by a fundamental and cannot be related by the
+  reflection), so the soliton dispersion minimum is shifted off `momentum = 0`; scan `momentum` to
+  find the rest soliton. Its mass matches the default (per-flavor) representation.
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     maxiters::Int = 500, initiallinkdim::Int = 10, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing, AbstractVector} = nothing,
@@ -511,23 +522,36 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     if solitons
         isinf(hamiltonian.lattice.N) ||
             throw(ArgumentError("solitons are only available on an infinite lattice"))
-        hamiltonian.lattice.flavor_sym &&
-            throw(ArgumentError("solitons are not supported with flavor_sym"))
         θ2π = hamiltonian.lattice.θ2π[1]
         isapprox(mod(θ2π, 1.0), 0.5; atol = 1e-8) ||
             throw(ArgumentError("solitons require θ = π (mod 2π), i.e. θ2π ≡ 1/2 (mod 1); got θ2π = $θ2π"))
 
         n  = round(Int, -0.5 - θ2π)
         Uc = length(spaces)
-        ψ₀ = MPSKit.InfiniteMPS(spaces, [U1Space([q => initiallinkdim for q in hamiltonian.lattice.q*(-initial_Lmax:initial_Lmax)]) for _ in 1:Uc])
+        fsym = hamiltonian.lattice.flavor_sym
+        # background-charge target sector for `attenuateLinks`: the bare U(1) charge, or (for
+        # flavor_sym) the product sector (charge, flavor-singlet).
+        bg_target(c) = fsym ? (U1Irrep(c) ⊠ _flavor_irrep(hamiltonian.lattice.F, 0)) : U1Irrep(c)
+        ψ₀ = MPSKit.InfiniteMPS(spaces, [_mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax) for _ in 1:Uc])
         alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0, finalize = vumps_finalize)
-        # Solve the first vacuum (biased to background charge n by `attenuateLinks`), then obtain
-        # the second as its parity reflection. Using P rather than a second independent VUMPS solve
-        # fixes the two vacua's relative phase (removing the soliton's phase ambiguity), gives a
-        # symmetric soliton dispersion (min at k=0), and is cheaper. See `_reflect_vacuum`.
-        ψ1, envs1, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(U1Irrep(n), Uc), attenuation), H, alg)
-        ψ2 = _reflect_vacuum(ψ1, n)
-        envs2 = MPSKit.environments(ψ2, H)
+        # Solve the first vacuum, biased to background charge n by `attenuateLinks`.
+        ψ1, envs1, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(bg_target(n), Uc), attenuation), H, alg)
+        if fsym
+            # flavor_sym: the two θ=π vacua differ by one unit of background charge = a fundamental
+            # of SU(F) (odd n-ality), so NO charge relabelling (reflection) connects them — the
+            # domain wall genuinely carries a fundamental. Solve the second vacuum independently,
+            # biased to n+1. Because the reflection no longer fixes the two vacua's relative phase,
+            # the soliton dispersion minimum is shifted OFF k=0 (the wall carries the crystal
+            # momentum of the one-staggered-site translation relating the vacua); scan `momentum`
+            # to locate the band minimum / rest soliton. (Its energy matches the default rep.)
+            ψ2, envs2, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(bg_target(n + 1), Uc), attenuation), H, alg)
+        else
+            # default per-flavor layout: build v2 by charge conjugation of v1 (a one-staggered-site
+            # translation = shift by F MPSKit sites), which fixes the relative phase (min at k=0)
+            # and is cheaper than a second solve. See `_reflect_vacuum`.
+            ψ2 = _reflect_vacuum(ψ1, n, hamiltonian.lattice.F)
+            envs2 = MPSKit.environments(ψ2, H)
+        end
 
         v1, v2 = MPSKitState(hamiltonian, ψ1), MPSKitState(hamiltonian, ψ2)
         # The two θ=π vacua must differ (opposite background fields, ±1/2). If `attenuateLinks`

@@ -72,6 +72,10 @@ Constructs a Lattice for the Schwinger model.
 - `mlat::Union{Nothing,Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=nothing`: Lattice mass parameter.
 - `mprime::Union{Real,AbstractVector{<:Real},AbstractArray{<:Real,2}}=0.`: Hopping mass parameter.
 - `θ2π::Union{Real,NTuple{N,Real}}=0.`: Theta angle.
+- `flavor_sym::Bool=false`: Gauge the global ``SU(F)`` flavor symmetry into the MPS, so that
+  the `F` equal-mass flavors of each staggered site form a single physical site carrying
+  ``SU(F)`` multiplets. Requires `F ≥ 2`, equal flavor masses, a non-periodic lattice, and the
+  `MPSKit` backend. Enables flavor-resolved excitations via `loweststates(...; flavor_irrep=...)`.
 
 # Returns
 A `Lattice` object.

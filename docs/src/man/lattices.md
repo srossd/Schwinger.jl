@@ -10,6 +10,7 @@ Any calculation in `Schwinger.jl` will start with a `Lattice`. The only required
 - `m`: the physical mass (in coupling units); the [mass shift](https://arxiv.org/pdf/2206.05308) is applied automatically. (default `0`)
 - `mlat`: the mass parameter in the Hamiltonian (default `-q^2 * F * a/8`)
 - `mprime`: the coefficient of the hopping-type mass term (default `0`)
+- `flavor_sym`: for ``F \geq 2`` equal-mass flavors, gauge the global ``SU(F)`` flavor symmetry into the MPS so that excitations can be labelled by their flavor multiplet (default `false`, `MPSKit` backend only — see [States](states.md))
 
 The sites of the lattice are indexed from `1` to `N`. The electric field operators are laid out as in the diagram below.
 
