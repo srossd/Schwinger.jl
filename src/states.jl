@@ -401,36 +401,37 @@ end
 
 
 """
-`_reflect_vacuum(psi, n, sites_per_stagger)`
+`_charge_conjugate_vacuum(psi, n, sites_per_stagger)`
 
-Reflection of a θ=π vacuum `InfiniteMPS`, returning the other degenerate vacuum.
+Charge-conjugate a θ=π vacuum `InfiniteMPS`, returning the other degenerate vacuum.
 
-At θ = π the model has two degenerate vacua with background bond charge `n` and `n+1`. On the
-staggered lattice the map between them is a **one-site (staggered) translation** — the operation
-underlying charge conjugation, which swaps the two sublattices — composed with the charge map
-(virtual `q → -q + (2n+1)`, physical `q → -q`). One staggered site spans `sites_per_stagger`
-MPSKit sites (`= 1` for `flavor_sym`, `= F` for the default per-flavor layout), so the sublattice
-swap is a shift by `sites_per_stagger`, NOT a fixed one MPSKit site (the F=1 special case). The
-tensor data is copied, NOT complex-conjugated (the transformation stays unitary, which keeps the
-soliton's k → -k symmetry and a dispersion minimum at k=0).
+At θ = π the model has two degenerate vacua with background bond charge `n` and `n+1`, exchanged by
+charge conjugation `C`. On the staggered lattice `C` is a **one staggered-site translation**
+(sublattice swap) composed with the particle–hole charge map (virtual `q → -q + (2n+1)`, physical
+`q → -q`). One staggered site spans `sites_per_stagger` MPSKit sites (`= F` for the default
+per-flavor layout, `= 1` in the flavor-fused layout), so the sublattice swap is a shift by
+`sites_per_stagger`, not a fixed one MPSKit site (the F=1 special case). `C` acts linearly on the
+state, so the tensor data is copied, NOT complex-conjugated (which would instead be the
+*antiunitary* CP, giving a soliton dispersion without a k=0 minimum).
 
 Implemented by remapping fusion channels: for each native fusion tree of the target tensor, the
 data block of the matching source channel — identified by its coupled (flux) charge, which is
 independent of the dual-leg convention — is copied in.
 
-Building `v2` from `v1` this way (rather than a second independent VUMPS solve) fixes the two
-vacua's relative phase, removing the soliton's phase ambiguity, and is cheaper.
+Building `v2 = C(v1)` (rather than a second independent VUMPS solve) fixes the two vacua's relative
+phase, removing the soliton's momentum ambiguity (dispersion minimum at k=0), and is cheaper.
 
-NOTE: this pure charge relabelling is correct for the default (per-flavor U(1)) layout. It does
-NOT work for `flavor_sym`: there every bond obeys the n-ality `c ≡ nality(R) mod F`, and the two
-vacua differ by one unit of background charge = one fundamental of SU(F) (odd n-ality), so they
-live in different flavor sectors and no charge relabelling connects them (the soliton domain wall
-carries a fundamental). `flavor_sym` solitons are handled separately / not yet supported.
+Used for the default per-flavor U(1) layout ONLY. It does not apply to `flavor_sym`: there every
+bond obeys the n-ality `c ≡ nality(R) mod F`, and the two vacua differ by one unit of background
+charge = one fundamental of SU(F) (odd n-ality), which sits in a different flavor sector, so no
+charge relabelling connects them (the soliton domain wall genuinely carries a fundamental).
+`loweststates` therefore builds the `flavor_sym` second vacuum by an independent VUMPS solve
+instead — see the `solitons` branch.
 """
-function _reflect_vacuum(psi::MPSKit.InfiniteMPS, n::Int, sites_per_stagger::Int = 1)
+function _charge_conjugate_vacuum(psi::MPSKit.InfiniteMPS, n::Int, sites_per_stagger::Int = 1)
     Uc    = length(psi)
     shift = 2n + 1                        # virtual: q → -q + shift ;  physical: q → -q
-    function reflect(A)
+    function conjugate(A)
         vLs, phs, vRs = TensorKit.space(A, 1), TensorKit.space(A, 2), TensorKit.space(A, 3)
         newvL = U1Space((U1Irrep(-c.charge + shift) => TensorKit.dim(vLs, c) for c in TensorKit.sectors(vLs))...)
         newph = U1Space((U1Irrep(-c.charge)         => TensorKit.dim(phs, c) for c in TensorKit.sectors(phs))...)
@@ -444,14 +445,14 @@ function _reflect_vacuum(psi::MPSKit.InfiniteMPS, n::Int, sites_per_stagger::Int
         end
         for (f1, f2) in TensorKit.fusiontrees(A)
             key = (-f1.coupled.charge + shift, -f1.uncoupled[1].charge + shift, -f1.uncoupled[2].charge)
-            haskey(targets, key) || error("_reflect_vacuum: unmatched fusion channel $key")
+            haskey(targets, key) || error("_charge_conjugate_vacuum: unmatched fusion channel $key")
             g1, g2 = targets[key]
-            B[g1, g2] = copy(A[f1, f2])   # unitary reflection: copy, do NOT conjugate
+            B[g1, g2] = copy(A[f1, f2])   # C acts linearly: copy, do NOT complex-conjugate
         end
         return B
     end
-    # one staggered-site translation (sublattice swap) composed with the per-site reflection
-    return MPSKit.InfiniteMPS([reflect(psi.AL[mod1(i + sites_per_stagger, Uc)]) for i in 1:Uc])
+    # one staggered-site translation (sublattice swap) composed with the per-site charge conjugation
+    return MPSKit.InfiniteMPS([conjugate(psi.AL[mod1(i + sites_per_stagger, Uc)]) for i in 1:Uc])
 end
 
 
@@ -548,8 +549,8 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         else
             # default per-flavor layout: build v2 by charge conjugation of v1 (a one-staggered-site
             # translation = shift by F MPSKit sites), which fixes the relative phase (min at k=0)
-            # and is cheaper than a second solve. See `_reflect_vacuum`.
-            ψ2 = _reflect_vacuum(ψ1, n, hamiltonian.lattice.F)
+            # and is cheaper than a second solve. See `_charge_conjugate_vacuum`.
+            ψ2 = _charge_conjugate_vacuum(ψ1, n, hamiltonian.lattice.F)
             envs2 = MPSKit.environments(ψ2, H)
         end
 
