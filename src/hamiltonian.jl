@@ -633,6 +633,7 @@ Computes the MPSKit hopping operator for the Schwinger model.
     if isinf(lattice.N)
         mpo = InfiniteMPOHamiltonian(A)
     else
+        _prune_passthroughs!(A, lattice.F)
         A[1] = A[1][1:1, :]
         A[end] = A[end][:, end:end]
         mpo = FiniteMPOHamiltonian(A)
@@ -851,8 +852,33 @@ function _matter_mpo_matrices(lattice::Lattice; universe::Int = 0)
     return A, MPSKitGaugeKinetic(lattice; universe = universe)
 end
 
+# Remove pass-through channels whose spanning hop leaves the finite lattice (in place).
+# A flavor-`j` hopping channel is only open across a site `n` (flavor `f0`) when the hop that
+# opened it has both a source and a destination inside the lattice. That hop starts at
+# `m = n - δ` with `δ = mod(f0 - j, F)` (the nearest earlier site of flavor `j`) and closes at
+# `m + F`. Near the boundaries `m < 1` (source outside) or `m + F > M` (destination outside), so
+# the pass-through has no matching bond on one side and must be dropped — otherwise the explicit
+# identity tensor (b29b8b1) creates a dangling ±q virtual space that mismatches its neighbour.
+# For F ≤ 2 this never fires beyond the sites already sliced away by the boundary vectors.
+function _prune_passthroughs!(A, F::Int)
+    M = length(A)
+    for n in 1:M
+        f0 = mod(n - 1, F) + 1
+        for j in 1:F
+            j == f0 && continue
+            m = n - mod(f0 - j, F)
+            if m < 1 || m + F > M
+                A[n][1 + 2*(j - 1) + 1, 1 + 2*(j - 1) + 1] = missing
+                A[n][1 + 2*(j - 1) + 2, 1 + 2*(j - 1) + 2] = missing
+            end
+        end
+    end
+    return A
+end
+
 # Trim the boundary channels of a finite matter MPO channel-matrix list (in place).
 function _trim_finite_mpo!(A, F::Int)
+    _prune_passthroughs!(A, F)
     A[1] = A[1][1:1, :]
     for j in 2:F, k in 2:(2F + 1); A[j][k, end] = missing; end
     for j in (length(A) - F + 1):(length(A) - 1), k in 2:(2F + 1); A[j][1, k] = missing; end

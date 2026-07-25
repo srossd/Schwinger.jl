@@ -629,7 +629,16 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         end
         ψ₀ = MPSKit.FiniteMPS(rand, ComplexF64, spc, _mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax); right = _mpskit_right_space(hamiltonian.lattice, total_defect))
         alg = MPSKit.DMRG2(; maxiter=maxiters, tol=energy_tol, trscheme = trunctol(; rtol = cutoff), verbosity=verbose ? 1 : 0)
+        # A single DMRG2 optimisation grows the bond dimension, but its energy-difference
+        # convergence can park at a shallow stationary point: the energy matches the exact GS to
+        # ~1e-9 while local observables (densities, occupations) are still off by ~1e-4, and this
+        # floor does NOT move when `energy_tol`/`cutoff` are tightened. Restarting DMRG2 from the
+        # converged state (with fresh environments) escapes the plateau and drives observables to
+        # machine precision — worst density-vs-ED ratio ~1e-8 across seeds, versus ~2e-4 with a
+        # single pass. (Single-site DMRG would polish faster but is unsupported by the LEMPO's
+        # Jordan-MPO AC derivative when hopping channels are `missing` at the boundary.)
         ψ, = MPSKit.find_groundstate(ψ₀, Huse, alg)
+        ψ, = MPSKit.find_groundstate(ψ,  Huse, alg)
         states[1] = MPSKitState(hamiltonian, split(ψ), hamiltonian.defects)
 
         if nstates > 1
@@ -655,6 +664,7 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
                 ψR0 = MPSKit.FiniteMPS(rand, ComplexF64, spc,
                         _mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax); right = rightR)
                 ψR, = MPSKit.find_groundstate(ψR0, Huse, alg)
+                ψR, = MPSKit.find_groundstate(ψR,  Huse, alg)
                 states[2] = MPSKitState(hamiltonian, split(ψR), hamiltonian.defects)
                 if nstates > 2
                     _, psisR = MPSKit.excitations(Huse, MPSKit.FiniteExcited(alg, weight), (ψR,); num = nstates - 2)
