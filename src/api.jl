@@ -210,6 +210,46 @@ FermionField(lattice::Lattice, site::Int, ::ITensorsBackend; kwargs...) = ITenso
 FermionField(lattice::Lattice, site::Int, ::MPSKitBackend; kwargs...) = MPSKitFermionField(lattice, site; kwargs...)
 
 # =============================================================================
+# ChargeCurrent (vector current j¹ through bond (n, n+1))
+# =============================================================================
+
+"""
+    ChargeCurrent(lattice, bond; backend=nothing, ...)
+
+Construct the conserved vector current j¹ through bond `(bond, bond+1)`,
+`j¹_n = -i[H, Q_{≤n}]`, satisfying the lattice continuity equation
+`∂_t ρ_n = -(j¹_n - j¹_{n-1})`. Requires `mprime = 0`.
+"""
+function ChargeCurrent(lattice::Lattice, bond::Int; backend::Union{Symbol,Backend,Nothing}=nothing, kwargs...)
+    backend = isnothing(backend) ? get_default_backend() : resolve_backend(backend)
+    return ChargeCurrent(lattice, bond, backend; kwargs...)
+end
+
+ChargeCurrent(lattice::Lattice, bond::Int, ::EDBackend; kwargs...) = EDChargeCurrent(lattice, bond; kwargs...)
+ChargeCurrent(lattice::Lattice, bond::Int, ::ITensorsBackend; kwargs...) = ITensorChargeCurrent(lattice, bond; kwargs...)
+ChargeCurrent(lattice::Lattice, bond::Int, ::MPSKitBackend; kwargs...) = MPSKitChargeCurrent(lattice, bond; kwargs...)
+
+# =============================================================================
+# EnergyCurrent (energy current T⁰¹ = 𝒥 at site n)
+# =============================================================================
+
+"""
+    EnergyCurrent(lattice, site; backend=nothing, ...)
+
+Construct the conserved energy current T⁰¹ at `site`, `𝒥_n = i[b_{n-1}, b_n]`,
+satisfying the exact lattice continuity `∂_t h_n = 𝒥_n - 𝒥_{n+1}`. Requires
+`mprime = 0`. Valid for interior sites `2 ≤ site ≤ N-1`.
+"""
+function EnergyCurrent(lattice::Lattice, site::Int; backend::Union{Symbol,Backend,Nothing}=nothing, kwargs...)
+    backend = isnothing(backend) ? get_default_backend() : resolve_backend(backend)
+    return EnergyCurrent(lattice, site, backend; kwargs...)
+end
+
+EnergyCurrent(lattice::Lattice, site::Int, ::EDBackend; kwargs...) = EDEnergyCurrent(lattice, site; kwargs...)
+EnergyCurrent(lattice::Lattice, site::Int, ::ITensorsBackend; kwargs...) = ITensorEnergyCurrent(lattice, site; kwargs...)
+EnergyCurrent(lattice::Lattice, site::Int, ::MPSKitBackend; kwargs...) = MPSKitEnergyCurrent(lattice, site; kwargs...)
+
+# =============================================================================
 # AverageElectricField
 # =============================================================================
 

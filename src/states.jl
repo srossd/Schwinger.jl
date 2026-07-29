@@ -331,7 +331,7 @@ end
 Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
 
 # Arguments
-- `hamiltonian::MPOOperator`: Schwinger model Hamiltonian.
+- `hamiltonian::ITensorOperator`: Schwinger model Hamiltonian.
 - `nstates::Int`:: number of states to determine.
 - `momentum::Union{Real,Nothing} = nothing`: for an infinite lattice (MPSKit backend), the
   physical momentum (in units of the coupling `g`, like the rest of the code) at which to
@@ -370,7 +370,7 @@ function loweststates(hamiltonian::ITensorOperator, nstates::Int;
 end
 
 """
-`lowest_states(hamiltonian, nstates)`
+`loweststates(hamiltonian, nstates)`
 
 Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
 
@@ -457,7 +457,7 @@ end
 
 
 """
-`lowest_states(hamiltonian, nstates)`
+`loweststates(hamiltonian, nstates)`
 
 Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSKit.
 
@@ -1217,6 +1217,7 @@ function occupation(state::EDState, site::Int)
     if !(1 ≤ site ≤ state.hamiltonian.lattice.N)
         throw(ArgumentError("Site must be between 1 and N"))
     end
+    F = state.hamiltonian.lattice.F
     states = _edbasis(state)
     occs = zeros(F)
     for (coeff, state) in zip(state.coeffs, states)

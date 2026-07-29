@@ -30,6 +30,10 @@ using Test
         include("energy_density.jl")
     end
 
+    @testset "Currents" begin
+        include("currents.jl")
+    end
+
     @testset "Flavor symmetry" begin
         include("flavor_symmetry.jl")
     end

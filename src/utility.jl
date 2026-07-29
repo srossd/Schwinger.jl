@@ -106,7 +106,7 @@ end
 # =============================================================================
 
 """
-    get_mpskit_spaces(lattice; L_max=3)
+    get_mpskit_spaces(lattice)
 
 Create TensorKit vector spaces for MPSKit MPS/MPO construction.
 Returns a vector of physical spaces for each site.

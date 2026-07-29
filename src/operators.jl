@@ -39,7 +39,6 @@ struct EDOperator <: SchwingerOperator
     function EDOperator(lattice::Lattice, matrix::SparseMatrixCSC{ComplexF64,Int64}, L_max::Int, universe::Int,
                        in_charge::Int = 0, out_charge::Int = 0,
                        defects::Vector{DefectCharge} = DefectCharge[])
-        N, F = lattice.N, lattice.F
         return new(lattice, matrix, L_max, universe, in_charge, out_charge, defects)
     end
 end
@@ -76,7 +75,6 @@ struct ITensorOperator <: SchwingerOperator
 
     function ITensorOperator(lattice::Lattice, mpo::ITensorMPS.MPO, L_max::Int, universe::Int,
                             defects::Vector{DefectCharge} = DefectCharge[])
-        N, F = lattice.N, lattice.F
         return new(lattice, mpo, L_max, universe, defects)
     end
 end
@@ -108,6 +106,17 @@ struct MPSKitOperator <: SchwingerOperator
     function MPSKitOperator(lattice::Lattice, lempo::MPSKit.AbstractMPO, universe::Int = 0,
                            defects::Vector{DefectCharge} = DefectCharge[])
         return new(lattice, lempo, universe, defects)
+    end
+end
+
+# MPSKitOperator has no `L_max` field (the gauge field is integrated out), so validate only
+# the lattice and universe. Without this method the generic one errors on `op.L_max`.
+function validate_operator_compatibility(op1::MPSKitOperator, op2::MPSKitOperator, operation::String)
+    if op1.lattice != op2.lattice
+        throw(ArgumentError("Cannot $operation operators on different lattices"))
+    end
+    if op1.universe != op2.universe
+        throw(ArgumentError("Cannot $operation operators from different universes: $(op1.universe) ≠ $(op2.universe)"))
     end
 end
 

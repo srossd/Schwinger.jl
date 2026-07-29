@@ -220,7 +220,7 @@ function opsum_gaugekinetic(lattice::Lattice; universe::Int = 0, bare::Bool = tr
 end
 
 """
-`MPOGaugeKinetic(lattice)`
+`ITensorGaugeKinetic(lattice)`
 
 Computes the MPO gauge kinetic operator for the Schwinger model.
 
@@ -251,7 +251,7 @@ function opsum_mass(lattice::Lattice; bare::Bool = true)
 end
 
 """
-`MPOMass(lattice)`
+`ITensorMass(lattice)`
 
 Computes the MPO mass operator for the Schwinger model.
 
@@ -297,7 +297,7 @@ function opsum_hopping(lattice::Lattice; bare::Bool = true)
 end
 
 """
-`MPOHopping(lattice)`
+`ITensorHopping(lattice)`
 
 Computes the MPO hopping operator for the Schwinger model.
 
@@ -414,7 +414,7 @@ end
 end
 
 """
-`MPOHoppingMass(lattice)`
+`ITensorHoppingMass(lattice)`
 
 Computes the MPO hopping-mass operator for the Schwinger model.
 
@@ -430,7 +430,7 @@ Computes the MPO hopping-mass operator for the Schwinger model.
 end
 
 """
-`MPOHamiltonian(lattice)`
+`ITensorHamiltonian(lattice)`
 
 Computes the MPO Hamiltonian for the Schwinger model.
 

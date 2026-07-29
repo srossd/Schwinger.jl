@@ -21,12 +21,15 @@ export SchwingerOperator, EDOperator, ITensorOperator, MPSKitOperator
 # Unified API (backend-agnostic)
 export Hamiltonian, GaugeKinetic, Mass, Hopping, HoppingMass
 export WilsonLoop, WilsonLine, AverageElectricField
+export ChargeCurrent, EnergyCurrent
 
 # Backend-specific operators (for backward compatibility)
 export EDHamiltonian, ITensorHamiltonian, MPSKitHamiltonian
 export EDGaugeKinetic, EDMass, EDHopping, EDHoppingMass
 export ITensorGaugeKinetic, ITensorMass, ITensorHopping, ITensorHoppingMass
 export MPSKitGaugeKinetic, MPSKitMass, MPSKitHopping, MPSKitHoppingMass
+export EDChargeCurrent, ITensorChargeCurrent, MPSKitChargeCurrent
+export EDEnergyCurrent, ITensorEnergyCurrent, MPSKitEnergyCurrent
 export EDWilsonLoop, ITensorWilsonLoop, MPSKitWilsonLoop
 export EDWilsonLine, ITensorWilsonLine, MPSKitWilsonLine
 export EDAverageElectricField, ITensorAverageElectricField, MPSKitAverageElectricField
@@ -45,6 +48,7 @@ export L₀, electricfield, electricfields
 export entanglement, entanglements
 export scalar, scalardensity, scalardensities
 export pseudoscalar, pseudoscalardensity, pseudoscalardensities
+export chargecurrents, energycurrents
 
 # ITensors and ITensorMPS
 using ITensors, ITensorMPS
@@ -83,6 +87,7 @@ include("./flavor_symmetry.jl")
 include("./wavepacket.jl")
 include("./wilson.jl")
 include("./average_electric_field.jl")
+include("./currents.jl")
 include("./timeevolution.jl")
 include("./api.jl")
 # include("./hdf5.jl")

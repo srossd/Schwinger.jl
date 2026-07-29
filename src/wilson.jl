@@ -23,7 +23,7 @@ function ITensorWilsonLoop(lattice::Lattice, conjugate::Bool = false; L_max::Uni
 end
 
 """
-`wilsonloop(hamiltonian, conjugate = false)`
+`EDWilsonLoop(lattice, conjugate = false)`
 
 Returns the spatial Wilson loop operator for `lattice`.
 

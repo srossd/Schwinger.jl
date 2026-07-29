@@ -57,11 +57,11 @@ end
 """
     evolve(state::ITensorState, t::Real; nsteps::Int = 1, observable = nothing, kwargs...)
 
-Evolve an ITensor MPS state by imaginary time `t` using TDVP.
+Evolve an ITensor MPS state by real time `t` using TDVP.
 
 # Arguments
 - `state::ITensorState`: The state to evolve.
-- `t::Real`: The time to evolve by (will be multiplied by -im for imaginary time evolution).
+- `t::Real`: The time to evolve by (multiplied by -im, i.e. real-time evolution exp(-iHt)).
 - `nsteps::Int = 1`: Number of time steps for the TDVP algorithm.
 - `maxlinkdim::Union{Nothing,Int} = nothing`: Maximum bond dimension to keep
   during the evolution (forwarded to ITensorMPS `tdvp` as `maxdim`).

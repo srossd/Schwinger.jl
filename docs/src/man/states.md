@@ -97,6 +97,8 @@ charge
 charges
 electricfield
 electricfields
+chargecurrents
+energycurrents
 entanglement
 entanglements
 energy

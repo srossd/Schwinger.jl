@@ -35,12 +35,23 @@ expectation
 act
 ```
 
+## Conserved currents
+
+The conserved lattice vector (charge) current ``j^1`` (`ChargeCurrent`) and energy current ``T^{01} = \mathcal{J}`` (`EnergyCurrent`), built from each backend's own hopping/mass operators and exactly conserved on the lattice.
+
+```@docs
+ChargeCurrent
+EnergyCurrent
+```
+
 ## Exact diagonalization
 
 ```@docs
 EDWilsonLoop
 EDWilsonLine
 EDAverageElectricField
+EDChargeCurrent
+EDEnergyCurrent
 ```
 
 ## ITensors operators
@@ -49,6 +60,8 @@ EDAverageElectricField
 ITensorWilsonLoop
 ITensorWilsonLine
 ITensorAverageElectricField
+ITensorChargeCurrent
+ITensorEnergyCurrent
 ```
 
 ## MPSKit operators
@@ -57,4 +70,6 @@ ITensorAverageElectricField
 MPSKitWilsonLoop
 MPSKitWilsonLine
 MPSKitAverageElectricField
+MPSKitChargeCurrent
+MPSKitEnergyCurrent
 ```
