@@ -1037,6 +1037,101 @@ function energy_densities(state::SchwingerState)
 end
 
 """
+    grow_window(state::MPSKitState; left = 0, right = 0)
+
+Grow a `WindowMPS`-backed wavepacket state by splicing extra vacuum sites onto its window:
+`left` sites drawn from the left environment (`left_gs.AL`) and `right` sites drawn from the
+right environment (`right_gs.AR`). The physical (evolved) content of the existing window is
+preserved exactly — the new sites are exact vacuum, and the isometric padding tensors leave
+the norm unchanged. Returns a new `MPSKitState`; the original is untouched.
+
+The window must remain aligned to the background unit cell, so `left`/`right` must each be a
+multiple of the corresponding environment's unit-cell length (`length(left_gs)` /
+`length(right_gs)`, i.e. `Uc = 2` for the Schwinger model). Growing shifts the window's site
+indices: an old site `k` becomes `k + left`.
+
+# Arguments
+- `state::MPSKitState`: a `WindowMPS`-backed state (throws otherwise).
+- `left::Int = 0`, `right::Int = 0`: number of vacuum sites to prepend/append.
+"""
+function grow_window(state::MPSKitState; left::Int = 0, right::Int = 0)
+    ψ = state.psi
+    ψ isa WindowMPS || throw(ArgumentError("grow_window requires a WindowMPS-backed state"))
+    left ≥ 0 && right ≥ 0 || throw(ArgumentError("left and right growth must be non-negative"))
+    lg, rg = ψ.left_gs, ψ.right_gs
+    Ucl, Ucr = length(lg), length(rg)
+    left % Ucl == 0 ||
+        throw(ArgumentError("left growth must be a multiple of the left unit-cell length $Ucl (got $left)"))
+    right % Ucr == 0 ||
+        throw(ArgumentError("right growth must be a multiple of the right unit-cell length $Ucr (got $right)"))
+    (left == 0 && right == 0) && return state
+
+    W = length(ψ)
+    # Represent the current window as tensors whose contraction is the state: put the
+    # orthogonality centre on site 1 (AC[1]) and keep the rest right-canonical (AR).
+    body = vcat([ψ.AC[1]], [ψ.AR[i] for i in 2:W])
+    # Padding: exact vacuum tensors, unit-cell aligned so the virtual spaces glue up and the
+    # WindowMPS boundary conditions (VL matches left_gs at site 1, VR matches right_gs at the
+    # last site) are preserved.
+    leftpad  = [lg.AL[mod1(i, Ucl)]     for i in 1:left]
+    rightpad = [rg.AR[mod1(W + j, Ucr)] for j in 1:right]
+
+    newwindow = FiniteMPS(vcat(leftpad, body, rightpad); normalize = false)
+    return MPSKitState(state.hamiltonian, WindowMPS(lg, newwindow, rg), state.defects)
+end
+
+"""
+    boundary_energy_excess(state::MPSKitState; nsites = 8)
+
+Return `(left, right)`: the maximum energy-density excess above the local vacuum within
+`nsites` of the left and right window boundaries, respectively. The vacuum reference is each
+wing's own infinite-vacuum energy density (`left_gs`/`right_gs`). Used by the default adaptive
+window-growth condition (see [`window_growth_condition`](@ref)).
+
+The very outermost site on each side is skipped: `energy_densities` overwrites it with the
+wing vacuum energy density (it misses the bond into the wing), so it carries no signal.
+"""
+function boundary_energy_excess(state::MPSKitState; nsites::Int = 8)
+    state.psi isa WindowMPS ||
+        throw(ArgumentError("boundary_energy_excess requires a WindowMPS-backed state " *
+                            "(the infinite wings supply the vacuum reference)"))
+    eds = energy_densities(state)
+    W = length(eds)
+    W ≥ 3 || return (0.0, 0.0)
+    n = min(nsites, W - 2)
+    lv, rv = _window_vacua(state)
+    evac_l = real(energy_density(lv))
+    evac_r = real(energy_density(rv))
+    left_excess  = maximum(eds[i] - evac_l for i in 2:(1 + n))
+    right_excess = maximum(eds[i] - evac_r for i in (W - n):(W - 1))
+    return (left_excess, right_excess)
+end
+
+"""
+    window_growth_condition(; nsites = 8, threshold = 1e-3, growth = 2*length(left_gs))
+
+Build the default callback for adaptive window growth during [`evolve`](@ref). The returned
+function maps a `WindowMPS` state to `(left, right)`, the number of vacuum sites to splice on
+each side this step: the window grows on a side whenever the energy density anywhere within
+`nsites` of that boundary exceeds the local vacuum by more than `threshold` (signalling that
+the wavepacket has reached the edge). Each triggered side grows by `growth` sites (default:
+one background unit cell per boundary; must be a multiple of the unit-cell length).
+
+# Keyword arguments
+- `nsites::Int = 8`: how many sites in from each boundary to monitor.
+- `threshold::Real = 1e-3`: energy-density excess (over vacuum) that triggers growth.
+- `growth::Int = 2`: sites added to a triggered boundary (default one Schwinger unit cell).
+"""
+function window_growth_condition(; nsites::Int = 8, threshold::Real = 1e-3, growth::Int = 2)
+    return function (state::MPSKitState)
+        left_excess, right_excess = boundary_energy_excess(state; nsites = nsites)
+        grow_left  = left_excess  > threshold ? growth : 0
+        grow_right = right_excess > threshold ? growth : 0
+        return (grow_left, grow_right)
+    end
+end
+
+"""
 `energy(state)`
 
 Return the expectation value of the Hamiltonian.

@@ -61,4 +61,8 @@ end
     @testset "Reflection-symmetric QP gauge" begin
         include("wavepacket_gauge.jl")
     end
+
+    @testset "Adaptive window growth" begin
+        include("grow_window.jl")
+    end
 end

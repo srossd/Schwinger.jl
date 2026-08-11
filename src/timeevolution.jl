@@ -151,6 +151,13 @@ Evolve an MPSKit MPS state by real time `t` using MPSKit's TDVP algorithm.
   `observer` carries the full history accumulated so far, so a single (overwritten) file can
   hold both the latest wavefunction and the whole trajectory for resuming/inspection.
 - `checkpoint_every::Int = 1`: how often (in steps) to invoke `checkpoint`.
+- `grow::Union{Nothing,Bool,Function} = nothing`: adaptively grow the window during
+  evolution (only valid for a `WindowMPS`-backed state — throws otherwise). After each step
+  the callback `(state) -> (left, right)` decides how many vacuum sites to splice onto each
+  boundary (see [`grow_window`](@ref)); returning `(0, 0)` leaves the window unchanged. Pass
+  `true` to use the default condition ([`window_growth_condition`](@ref): grow a side when the
+  energy density near that boundary exceeds the vacuum by a threshold), or supply your own
+  callback. `nothing`/`false` disables growth.
 - `kwargs...`: Additional keyword arguments forwarded to `MPSKit.timestep`.
 
 # Returns
@@ -160,7 +167,19 @@ Evolve an MPSKit MPS state by real time `t` using MPSKit's TDVP algorithm.
 function evolve(state::MPSKitState, t::Real; nsteps::Int = 1, two_site::Bool = false,
                 maxlinkdim::Union{Nothing,Int} = nothing, trscheme = nothing,
                 observable::Union{Nothing,Function,Dict} = nothing,
-                checkpoint::Union{Nothing,Function} = nothing, checkpoint_every::Int = 1, kwargs...)
+                checkpoint::Union{Nothing,Function} = nothing, checkpoint_every::Int = 1,
+                grow::Union{Nothing,Bool,Function} = nothing, kwargs...)
+    # Adaptive window growth: only meaningful for a WindowMPS (needs explicit infinite wings to
+    # draw vacuum sites from). Resolve the requested option to a callback (or `nothing`).
+    growcb = if grow === nothing || grow === false
+        nothing
+    else
+        state.psi isa WindowMPS ||
+            throw(ArgumentError("grow requires a WindowMPS-backed state (got $(typeof(state.psi)))"))
+        isempty(state.defects) ||
+            throw(ArgumentError("adaptive window growth is not supported together with defects"))
+        grow === true ? window_growth_condition() : grow
+    end
     # With static defects, evolve in the absorbed representation (defect sites fused into
     # their matter neighbours) so the bond dimension can grow, then split them back out.
     if !isempty(state.defects)
@@ -217,6 +236,13 @@ function evolve(state::MPSKitState, t::Real; nsteps::Int = 1, two_site::Bool = f
     for (i, tnow) in enumerate(t/nsteps .* (1:nsteps))
         @info "TDVP step $i / $nsteps (t = $tnow / $t)"
         ψ = MPSKit.timestep(ψ, H, tnow, t/nsteps, alg; kwargs...)[1]
+        if !isnothing(growcb)
+            gl, gr = growcb(MPSKitState(state.hamiltonian, ψ, state.defects))
+            if gl != 0 || gr != 0
+                ψ = grow_window(MPSKitState(state.hamiltonian, ψ, state.defects); left = gl, right = gr).psi
+                @info "grew window by (left = $gl, right = $gr) → length $(length(ψ))"
+            end
+        end
         Observers.update!(obs; step = i, current_time = tnow, state = ψ)
         if !isnothing(checkpoint) && i % checkpoint_every == 0
             checkpoint(MPSKitState(state.hamiltonian, ψ, state.defects), tnow, i, obs)
