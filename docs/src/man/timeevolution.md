@@ -24,3 +24,18 @@ plot!(0:.1:15, [cos(t/√(π)) for t in 0:.1:15], label = "Exact")
 ```@docs
 evolve
 ```
+
+## Adaptive window growth
+
+When time-evolving a quasiparticle wavepacket on an infinite background (a `WindowMPS`), the
+`grow` keyword of [`evolve`](@ref) can adaptively extend the finite window so a moving or
+spreading excitation never reaches the boundary. Vacuum sites are spliced onto the window from
+the infinite environments; the evolved content and norm are preserved exactly. The default
+condition grows a side whenever the energy density near that boundary exceeds the vacuum by a
+threshold, but any callback `(state) -> (left, right)` may be supplied.
+
+```@docs
+grow_window
+boundary_energy_excess
+window_growth_condition
+```
