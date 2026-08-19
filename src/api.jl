@@ -171,14 +171,35 @@ WilsonLoop(lattice::Lattice, conjugate::Bool, ::MPSKitBackend; kwargs...) = MPSK
     WilsonLine(lattice, conjugate=false, flavor=1, start=nothing, finish=nothing;
                backend=nothing, L_max=nothing, universe=0)
 
-Construct the spatial Wilson line operator using the specified backend.
+Construct the spatial Wilson line operator `χ†_start χ_finish` (times the electric-field
+string that makes it gauge invariant) using the specified backend.
+
+This is the **fermion** bilinear: it carries the full Jordan–Wigner `σᶻ` string on the
+sites strictly between the endpoints, i.e. the per-site sign `(-1)^n`. (Earlier versions
+omitted this string and so computed a hard-core-boson correlator; the Hamiltonian is
+unaffected because its hopping is nearest-neighbour, where the string is trivial.)
+
+!!! note "Which combination carries the signal"
+    The string flips the relative phase of the two staggered sublattices. For a neutral
+    (meson) quasiparticle the even/odd parities now have *opposite* real and *equal*
+    imaginary parts, so the signal lives in the **imaginary** part of `W_{0,ℓ} + W_{1,ℓ+1}`
+    (its real part vanishes) and in the **real** part of `W_{0,ℓ} - W_{1,ℓ+1}`. Summing the
+    real parts of `W_{0,ℓ} + W_{1,ℓ+1}` — correct before the string was added — now yields
+    zero.
 
 # Arguments
 - `backend`: Backend to use (`:ED`, `:ITensors`, `:MPSKit`), or `nothing` for default.
 """
 function WilsonLine(lattice::Lattice, conjugate::Bool=false, flavor::Int=1,
-                    start::Int=1, finish::Int=Int(lattice.N);
+                    start::Int=1, finish::Union{Int,Nothing}=nothing;
                     backend::Union{Symbol,Backend,Nothing}=nothing, kwargs...)
+    if isnothing(finish)
+        isinf(lattice.N) && throw(ArgumentError(
+            "On an infinite lattice `finish` must be given explicitly — only the length " *
+            "ℓ = finish - start is meaningful under translation invariance. " *
+            "E.g. WilsonLine(lattice, false, 1, 1, 1 + ℓ)."))
+        finish = Int(lattice.N)
+    end
     backend = isnothing(backend) ? get_default_backend() : resolve_backend(backend)
     return WilsonLine(lattice, conjugate, flavor, start, finish, backend; kwargs...)
 end

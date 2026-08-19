@@ -22,7 +22,7 @@ using Test
         include("fermionfield.jl")
     end
 
-    @testset "Zero-length Wilson line" begin
+    @testset "Wilson lines" begin
         include("wilson_line.jl")
     end
 

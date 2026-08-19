@@ -77,10 +77,20 @@ function ITensorWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::In
     phase = im^(finish - start)
     if start == finish
         line += 1,"S+",ind1,"S-",ind1          # zero-length line = number operator χ†ₙχₙ
-    elseif conjugate
-        line += conj(phase),"S-",ind1,"S+",ind2
     else
-        line += phase,"S+",ind1,"S-",ind2
+        # Jordan–Wigner σᶻ string on the intervening sites. occupied = spin-up, so the
+        # per-site sign is (-1)^n = -σᶻ = -2·Sz; ∏(-2·Sz) over the m sites between the
+        # endpoints contributes the scalar (-2)^m and an "Sz" on each of them.
+        lo, hi = minmax(ind1, ind2)
+        nmid = hi - lo - 1
+        coeff = (conjugate ? conj(phase) : phase) * (-2)^nmid
+        term = Any[coeff]
+        push!(term, conjugate ? "S-" : "S+", ind1)
+        for k in (lo + 1):(hi - 1)
+            push!(term, "Sz", k)
+        end
+        push!(term, conjugate ? "S+" : "S-", ind2)
+        line += Tuple(term)
     end
 
     mpo = ITensorMPS.MPO(line, get_sites(lattice; L_max=L_max))
@@ -122,12 +132,22 @@ function EDWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int = 1
         return constructoperator(lattice, numop; L_max = L_max, universe = universe)
     end
 
+    F = lattice.F
+    start_ind  = F * (start  - 1) + flavor
+    finish_ind = F * (finish - 1) + flavor
+    lo, hi = minmax(start_ind, finish_ind)
     function actW(state::BasisState)
         occs = copy(occupations(state))
         if occs[start, flavor] == (conjugate ? 1 : 0) && occs[finish, flavor] == (conjugate ? 0 : 1)
             occs[start, flavor] = (conjugate ? 0 : 1)
             occs[finish, flavor] = (conjugate ? 1 : 0)
-            return [(occs, L₀(state)) => 1]
+            # Jordan–Wigner σᶻ string: (-1)^(occupied JW-indices strictly between the
+            # endpoints). Intervening occupations are untouched, so read them off `occs`.
+            sgn = 1
+            for k in (lo + 1):(hi - 1)
+                occs[(k - 1) ÷ F + 1, (k - 1) % F + 1] == 1 && (sgn = -sgn)
+            end
+            return [(occs, L₀(state)) => sgn]
         end
         return []
     end
@@ -151,10 +171,30 @@ function MPSKitWilsonLoop(lattice::Lattice, conjugate::Bool = false; L_max::Unio
     error("Periodic lattices are not currently supported in MPSKit backend.")
 end
 
+# Charge-transporting pass-through carrying the Jordan–Wigner σᶻ string on one site: it moves
+# the bond charge `chg` past the site (like a BraidingTensor) but negates the occupied physical
+# sector, giving the per-site sign (-1)^n. The occupied sector is site-dependent in the staggered
+# layout — charge 0 on odd sites, charge +q on even sites — i.e. the larger of the site's two
+# charges, the same `i == 2`-after-sorting convention `numop`/`matrices_mass` use (NOT "nonzero
+# charge", which is inverted on odd sites). Real (Float64) like the other MPO tensors.
+function _wilson_jw_passthrough(P, chg)
+    T = isomorphism(Float64, U1Space(chg => 1) ⊗ P, P ⊗ U1Space(chg => 1))
+    occ = maximum(c -> c.charge, sectors(P))    # occupied = larger-charge sector
+    block(T, U1Irrep(chg + occ)) .*= -1
+    return T
+end
+
 """
 `MPSKitWilsonLine(lattice, conjugate = false, flavor = 1, start = 1, finish = N)`
 
 Returns the spatial Wilson line operator for `lattice` using MPSKit.
+
+On an **infinite** lattice this returns an `InfiniteMPOHamiltonian` whose expectation value is
+the two-site-translation-averaged Wilson line — the length-`ℓ = finish - start` fermion bilinear
+`χ†χ` (with its Jordan–Wigner string) averaged over the two sublattice start sites of the unit
+cell, `(⟨W_{0,ℓ}⟩ + ⟨W_{1,ℓ}⟩)/2`. Only `ℓ = finish - start` matters (absolute positions are
+meaningless under translation invariance), and `finish` must be passed explicitly with
+`finish > start`.
 
 # Arguments
 - `lattice::Lattice`: lattice.
@@ -163,14 +203,20 @@ Returns the spatial Wilson line operator for `lattice` using MPSKit.
 - `start::Int`: Starting site of the Wilson line.
 - `finish::Int`: Finishing site of the Wilson line.
 """
-function MPSKitWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int = 1, start::Int = 1, finish::Int = Int(lattice.N); universe::Int = 0) 
+function MPSKitWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int = 1, start::Int = 1, finish::Union{Int,Nothing} = nothing; universe::Int = 0)
     if lattice.periodic
         throw(ArgumentError("MPSKit backend not implemented for periodic lattices"))
     end
     _, universe = process_L_max_universe(lattice, 0, universe)
     N, F = lattice.N, lattice.F
+    if isnothing(finish)
+        isinf(N) && throw(ArgumentError(
+            "On an infinite lattice `finish` must be given explicitly — only the length " *
+            "ℓ = finish - start is meaningful. E.g. WilsonLine(lattice, false, 1, 1, 1 + ℓ)."))
+        finish = Int(N)
+    end
     if isinf(N)
-        throw(ArgumentError("Wilson lines not implemented for infinite lattices"))
+        return _mpskit_infinite_wilson_line(lattice, conjugate, flavor, start, finish; universe = universe)
     end
     N = Int(N)
 
@@ -215,7 +261,7 @@ function MPSKitWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int
         elseif n == finish_ind
             W[2, end] = finishop
         elseif start_ind < n < finish_ind
-            W[2, 2] = convert(TensorMap, BraidingTensor(spaces[n], U1Space(charge => 1)))
+            W[2, 2] = _wilson_jw_passthrough(spaces[n], charge)
         else
             W[2, 2] = convert(TensorMap, BraidingTensor(spaces[n], U1Space(0 => 1)))
         end
@@ -238,6 +284,56 @@ function MPSKitWilsonLine(lattice::Lattice, conjugate::Bool = false, flavor::Int
     mpo = FiniteMPOHamiltonian(A)
     return MPSKitOperator(lattice, phase * mpo, universe)
 end
+
+# Infinite-lattice Wilson line as an `InfiniteMPOHamiltonian`: a length-ℓ automaton opens a
+# fermion bilinear χ†χ (JW string) at every flavor-`flavor` site and closes it ℓ sites later.
+# Summing over all translates is exactly what an InfiniteMPOHamiltonian encodes, so its
+# expectation value on an InfiniteMPS is Σ over the unit cell of ⟨W⟩ = ⟨W_{0,ℓ}⟩ + ⟨W_{1,ℓ}⟩
+# (the two flavor-`flavor` start sites per unit cell); the 1/2 below turns that into the
+# two-site-translation *average*. Only ℓ = finish - start matters.
+#
+# Automaton bond states [I=1, s1..s_ℓjw, done=end] (ℓjw = F·ℓ JW-index span, dim ℓjw+2):
+#   I→I, done→done      : identity (before / after the line)
+#   I→s1                : open (startop), only on flavor-`flavor` sites
+#   s_k→s_{k+1}         : carry the charge + JW σᶻ string (every site, all flavors)
+#   s_ℓjw→done          : close (finishop), only on flavor-`flavor` sites
+function _mpskit_infinite_wilson_line(lattice::Lattice, conjugate::Bool, flavor::Int,
+                                      start::Int, finish::Int; universe::Int = 0)
+    F = lattice.F
+    ℓ = finish - start
+    ℓ ≥ 1 || throw(ArgumentError("infinite Wilson line requires finish > start (got start=$start, finish=$finish)"))
+
+    spaces = get_mpskit_spaces(lattice)         # 2F unit-cell spaces
+    U      = 2 * F                               # unit-cell length (JW indices)
+    charge = conjugate ? -lattice.q : lattice.q
+    ℓjw    = F * ℓ                               # JW-index span of the line
+    Dbond  = ℓjw + 2                             # [I, s1..s_ℓjw, done]
+
+    startop(P)  = ones(U1Space(0 => 1)      ⊗ P ← P ⊗ U1Space(charge => 1))
+    finishop(P) = ones(U1Space(charge => 1) ⊗ P ← P ⊗ U1Space(0 => 1))
+
+    Elt = Union{Missing, typeof(startop(spaces[flavor])), Float64}
+    A = Vector{Matrix{Elt}}(undef, U)
+    for n in 1:U
+        P = spaces[n]
+        W = Matrix{Elt}(missing, Dbond, Dbond)
+        W[1, 1]     = 1.0
+        W[end, end] = 1.0
+        for k in 1:(ℓjw - 1)                      # carry (charge + JW string) on every site
+            W[1 + k, 2 + k] = _wilson_jw_passthrough(P, charge)
+        end
+        if mod(n - 1, F) + 1 == flavor            # open/close only on flavor-`flavor` sites
+            W[1, 2]        = startop(P)
+            W[1 + ℓjw, end] = finishop(P)
+        end
+        A[n] = W
+    end
+
+    phase = conjugate ? conj(im^ℓ) : im^ℓ
+    mpo = InfiniteMPOHamiltonian(A)
+    return MPSKitOperator(lattice, (phase / 2) * mpo, universe)   # /2 = two-site average
+end
+
 # =============================================================================
 # Single staggered-fermion field  φ̃_s = ∏_{k<s}(±iσ^z_k) σ∓_s   (MPSKit)
 # =============================================================================
