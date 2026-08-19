@@ -171,6 +171,76 @@ function _window_charge_current(ψ, q::Int, a::Float64, ℓ::Int)
     return real(MPSKit.contract_mpo_expval2(ψ.AC[ℓ], ψ.AR[ℓ+1], op))
 end
 
+# Bare hopping-mass (pseudoscalar) bilinear on bond ℓ, as a *local 2-site operator tensor* contracted
+# with `contract_mpo_expval2` — the memory-light companion of `_window_charge_current`, mirroring
+# `_energy_densities_window`'s `hopop`.  This is the SAME symmetric transport χ†_ℓ χ_{ℓ+1} + h.c.
+# that the charge current uses, but combined SYMMETRICALLY (no sgn(qs), no i) and with the (−1)^{ℓ+1}
+# staggering that `matrices_hoppingmass` gives the bare mprime term (odd site_ind → +, even → −).
+# Returns the bare `MPSKitHoppingMass(lat, ℓ)` bond expectation p(ℓ); `pseudoscalardensity` combines
+# neighbouring bonds as (1/a)(p(site)/2 + p(before)/2).  Validated bond-by-bond against the per-site
+# operator path (`pseudoscalardensity`) on a finite θ-quench state (machine precision).
+function _window_pseudoscalar_bond(ψ, q::Int, ℓ::Int)
+    Pℓ  = TensorKit.space(ψ.AC[ℓ],   2)
+    Pℓ1 = TensorKit.space(ψ.AC[ℓ+1], 2)
+    raw = nothing
+    for qs in (q, -q)
+        openT  = ones(ComplexF64, U1Space(0 => 1)  ⊗ Pℓ  ← Pℓ  ⊗ U1Space(qs => 1))
+        closeT = ones(ComplexF64, U1Space(qs => 1) ⊗ Pℓ1 ← Pℓ1 ⊗ U1Space(0 => 1))
+        @tensor t[-1 -2; -3 -4] := openT[1, -1; -3, 2] * closeT[2, -2; -4, 1]
+        raw = raw === nothing ? t : raw + t
+    end
+    op = ((-1)^(ℓ + 1)) * raw
+    return real(MPSKit.contract_mpo_expval2(ψ.AC[ℓ], ψ.AR[ℓ+1], op))
+end
+
+# Uniform bulk pseudoscalar density of an infinite (translation-invariant) vacuum, e.g. a wavepacket
+# wing (`left_gs`/`right_gs`).  Every site is flanked by one odd and one even bond, so the density is
+# uniform = (p_odd + p_even)/(2a); averaging both sublattice bonds makes this robust to the wing's
+# absolute parity offset.  Used to replace the outermost window sites, which miss the bond into the
+# wing (exactly as `_energy_densities_window` replaces them with the wing vacuum energy density).
+function _vacuum_pseudoscalar_density(vac::MPSKitState, q::Int, a::Float64)
+    ψ = vac.psi                                          # an InfiniteMPS wing vacuum
+    return (_window_pseudoscalar_bond(ψ, q, 1) + _window_pseudoscalar_bond(ψ, q, 2)) / (2a)
+end
+
+"""
+`pseudoscalardensities(state::MPSKitState)`
+
+The pseudoscalar density P = ⟨ψ̄ iγ⁵ψ⟩ on each site as a profile over the lattice. For `F = 1` with no
+defects this uses a local 2-site contraction (`contract_mpo_expval2`, O(1) memory per bond) of the
+bare hopping-mass bilinear — the memory-light analogue of `chargecurrents`, avoiding the O(N²) memory
+of materialising the N per-site `MPSKitHoppingMass` operators. It matches the per-site
+`pseudoscalardensity` to machine precision, and works on a wavepacket window (`WindowMPS`) as well as a
+finite lattice.  Otherwise it falls back to the generic per-site path.
+
+On a `WindowMPS`, the two outermost sites miss the bond into the (infinite-vacuum) wing, which would
+leave them at half the true density; they are replaced with the wing's uniform vacuum pseudoscalar
+density so the profile connects smoothly to the background — mirroring `_energy_densities_window`.
+
+This is the operator that appears in the explicit-mass term of the axial Ward identity,
+∂_μ j₅^μ = (q/π)E + q·m_lat·P (lattice; continuum reading 2m·⟨ψ̄iγ⁵ψ⟩).
+"""
+function pseudoscalardensities(state::MPSKitState)
+    lat = lattice(state)
+    if lat.F == 1 && isempty(state.defects) && (isfinite(lat.N) || _isfinitewindow(state))
+        ψ = state.psi; W = length(ψ)
+        nrm2 = ψ isa MPSKit.InfiniteMPS ? 1.0 : real(dot(ψ, ψ))   # windows can drift from norm 1
+        p = [_window_pseudoscalar_bond(ψ, lat.q, ℓ) / nrm2 for ℓ in 1:W-1]   # bare bond bilinears
+        # pseudoscalardensity(site) = (1/a)·½(left bond + right bond); a boundary site keeps only its
+        # one existing bond (open end), so it is half-weight — then repaired to the wing value below.
+        pds = [_averaged_bond(ℓ -> p[ℓ], site, W, false) / lat.a for site in 1:W]
+        if ψ isa WindowMPS                                        # connect boundaries to the wings
+            lv, rv = _window_vacua(state)
+            pds[1]   = _vacuum_pseudoscalar_density(lv, lat.q, lat.a)
+            pds[end] = _vacuum_pseudoscalar_density(rv, lat.q, lat.a)
+        end
+        return pds
+    else
+        N = isinf(lat.N) ? 2 : Int(lat.N)
+        return pseudoscalardensity.(Ref(state), 1:N)
+    end
+end
+
 """
 `chargecurrents(state)` / `energycurrents(state)`
 
