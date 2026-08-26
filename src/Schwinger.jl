@@ -50,6 +50,7 @@ export entanglement, entanglements
 export scalar, scalardensity, scalardensities
 export pseudoscalar, pseudoscalardensity, pseudoscalardensities
 export chargecurrents, energycurrents
+export emt
 
 # ITensors and ITensorMPS
 using ITensors, ITensorMPS
@@ -89,6 +90,7 @@ include("./wavepacket.jl")
 include("./wilson.jl")
 include("./average_electric_field.jl")
 include("./currents.jl")
+include("./emt.jl")
 include("./timeevolution.jl")
 include("./api.jl")
 # include("./hdf5.jl")
