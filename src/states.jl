@@ -338,17 +338,31 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian.
   build the excited (quasiparticle) states; defaults to `0`. Internally converted to MPSKit's
   dimensionless lattice momentum `a·p`. Only supported on infinite lattices — passing a
   non-`nothing` value for a finite lattice throws an `ArgumentError`.
+- `groundstate = nothing`: a previously computed `ITensorState` ground state to reuse as the
+  lowest state, skipping its DMRG solve. Higher excited states are still found by DMRG,
+  penalizing the cached state.
 """
 function loweststates(hamiltonian::ITensorOperator, nstates::Int;
     maxiters::Int = 500, initiallinkdim::Int = 4, maxlinkdim::Int = 600, energy_tol::Real = 1E-6, weight::Real = 100, outputlevel::Int = 0, minsweeps::Int = 5,
-    momentum::Union{Real,Nothing} = nothing)
+    momentum::Union{Real,Nothing} = nothing, groundstate = nothing)
 
     isnothing(momentum) || throw(ArgumentError("Momentum-resolved excitations not supported for finite lattices"))
     H = hamiltonian.mpo
     N, F = hamiltonian.lattice.N, hamiltonian.lattice.F
 
+    if groundstate !== nothing
+        groundstate isa ITensorState ||
+            throw(ArgumentError("`groundstate` must be an `ITensorState`; got $(typeof(groundstate))"))
+    end
+
     states = Vector{ITensorState}(undef, nstates)
     for idx in 1:nstates
+        # Reuse a cached ground state as state 1, skipping its DMRG solve. Higher excited states
+        # still run DMRG penalizing the previously found states (including this cached one).
+        if idx == 1 && groundstate !== nothing
+            states[1] = groundstate
+            continue
+        end
         state = [n == N * F + 1 ? hamiltonian.L_max + 1 : isodd(floor((n-1)/F)) ? "Up" : "Dn" for n=1:(N * F + (hamiltonian.lattice.periodic ? 1 : 0))]
         psi = random_mps(get_sites(hamiltonian.lattice; L_max = hamiltonian.L_max), state; linkdims = initiallinkdim)
 
@@ -457,6 +471,60 @@ end
 
 
 """
+`_cached_gs_lattice_ok(hamiltonian, gs)`
+
+Sanity-check that a cached ground state was produced on a lattice matching `hamiltonian`
+(same N, F, and infinite/finite-ness). We do not require the exact same `Lattice`/operator
+object — a user may rebuild the Hamiltonian (e.g. different observables) while reusing a cached
+ground state solved with identical physical parameters.
+"""
+function _cached_gs_lattice_ok(hamiltonian::MPSKitOperator, gs::MPSKitState)
+    a, b = hamiltonian.lattice, gs.hamiltonian.lattice
+    return a.N == b.N && a.F == b.F && a.flavor_sym == b.flavor_sym
+end
+
+"""
+`_unpack_cached_groundstate(hamiltonian, groundstate; infinite)`
+
+Validate and return a cached single ground state passed to `loweststates`. `groundstate` must be
+an `MPSKitState` whose lattice matches `hamiltonian` and whose MPS is of the expected kind
+(`InfiniteMPS` when `infinite`, otherwise a finite `FiniteMPS`).
+"""
+function _unpack_cached_groundstate(hamiltonian::MPSKitOperator, groundstate; infinite::Bool)
+    groundstate isa MPSKitState ||
+        throw(ArgumentError("`groundstate` must be an `MPSKitState`; got $(typeof(groundstate))"))
+    _cached_gs_lattice_ok(hamiltonian, groundstate) ||
+        throw(ArgumentError("cached `groundstate` was solved on a different lattice (N/F/flavor_sym mismatch)"))
+    if infinite
+        groundstate.psi isa MPSKit.InfiniteMPS ||
+            throw(ArgumentError("cached `groundstate` for an infinite lattice must wrap an `InfiniteMPS`"))
+    else
+        groundstate.psi isa MPSKit.InfiniteMPS &&
+            throw(ArgumentError("cached `groundstate` for a finite lattice must wrap a finite MPS, not an `InfiniteMPS`"))
+    end
+    return groundstate
+end
+
+"""
+`_unpack_cached_vacua(hamiltonian, groundstate)`
+
+Validate and return a cached θ=π vacuum pair `(v1, v2)` passed to `loweststates(...; solitons=true)`.
+Accepts the `result[1]` value returned by an earlier soliton solve: a 2-tuple/vector of
+`MPSKitState`s wrapping `InfiniteMPS` backgrounds.
+"""
+function _unpack_cached_vacua(hamiltonian::MPSKitOperator, groundstate)
+    (groundstate isa Union{Tuple, AbstractVector} && length(groundstate) == 2) ||
+        throw(ArgumentError("cached soliton `groundstate` must be the `(v1, v2)` vacuum pair \
+                             (result[1] of an earlier soliton solve)"))
+    v1, v2 = groundstate[1], groundstate[2]
+    for v in (v1, v2)
+        _unpack_cached_groundstate(hamiltonian, v; infinite = true)
+    end
+    return v1, v2
+end
+
+
+"""
 `loweststates(hamiltonian, nstates)`
 
 Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSKit.
@@ -473,6 +541,12 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 - `svdcut::Bool` (default `true`): on an infinite lattice, adapt the VUMPS bond dimension each
   iteration via a two-site SVD update (`VUMPSSvdCut`) truncated at relative tolerance `cutoff`,
   growing from `initiallinkdim`. Set `false` to run VUMPS at the fixed `initiallinkdim` instead.
+- `groundstate` (default `nothing`): a previously computed ground state to reuse instead of
+  re-solving. Cache it once (e.g. `gs = groundstate(H)`), then pass it here to find excitations
+  at different momenta without repeating the VUMPS/DMRG2 solve. The excitation environments are
+  rebuilt from it, which is cheap. Must be an `MPSKitState` on a matching lattice (infinite vs.
+  finite is checked). With `solitons=true`, instead pass the vacuum pair `result[1] = (v1, v2)`
+  from an earlier soliton solve.
 - `solitons::Bool`: on an infinite θ=π lattice, return θ=π domain-wall (soliton) states.
   `result[1]` is the vacuum pair `(v1, v2)`; for `k ≥ 2`, `result[k]` is the `(soliton,
   antisoliton)` pair of the (k-1)-th band — or, for a momentum list, a list of such pairs (one
@@ -484,7 +558,8 @@ Returns the lowest few eigenstates of the Schwinger model Hamiltonian using MPSK
 """
 function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
     maxiters::Int = 500, initiallinkdim::Int = 10, bonddim::Union{Nothing,Int} = nothing, initial_Lmax::Int = 3, energy_tol::Real = 1E-6, cutoff::Real = 1E-10, weight::Real = 100., verbose::Bool = false, momentum::Union{Real, Nothing, AbstractVector} = nothing,
-    solitons::Bool = false, attenuation::Real = 1e-3, svdcut::Bool = true, flavor_irrep = nothing)
+    solitons::Bool = false, attenuation::Real = 1e-3, svdcut::Bool = true, flavor_irrep = nothing,
+    groundstate = nothing)
 
     initiallinkdim = something(bonddim, initiallinkdim)   # `bonddim` is an alias
 
@@ -533,28 +608,36 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
         # background-charge target sector for `attenuateLinks`: the bare U(1) charge, or (for
         # flavor_sym) the product sector (charge, flavor-singlet).
         bg_target(c) = fsym ? (U1Irrep(c) ⊠ _flavor_irrep(hamiltonian.lattice.F, 0)) : U1Irrep(c)
-        ψ₀ = MPSKit.InfiniteMPS(spaces, [_mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax) for _ in 1:Uc])
-        alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0, finalize = vumps_finalize)
-        # Solve the first vacuum, biased to background charge n by `attenuateLinks`.
-        ψ1, envs1, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(bg_target(n), Uc), attenuation), H, alg)
-        if fsym
-            # flavor_sym: the two θ=π vacua differ by one unit of background charge = a fundamental
-            # of SU(F) (odd n-ality), so NO charge relabelling (reflection) connects them — the
-            # domain wall genuinely carries a fundamental. Solve the second vacuum independently,
-            # biased to n+1. Because the reflection no longer fixes the two vacua's relative phase,
-            # the soliton dispersion minimum is shifted OFF k=0 (the wall carries the crystal
-            # momentum of the one-staggered-site translation relating the vacua); scan `momentum`
-            # to locate the band minimum / rest soliton. (Its energy matches the default rep.)
-            ψ2, envs2, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(bg_target(n + 1), Uc), attenuation), H, alg)
-        else
-            # default per-flavor layout: build v2 by charge conjugation of v1 (a one-staggered-site
-            # translation = shift by F MPSKit sites), which fixes the relative phase (min at k=0)
-            # and is cheaper than a second solve. See `_charge_conjugate_vacuum`.
-            ψ2 = _charge_conjugate_vacuum(ψ1, n, hamiltonian.lattice.F)
-            envs2 = MPSKit.environments(ψ2, H)
-        end
+        if groundstate === nothing
+            ψ₀ = MPSKit.InfiniteMPS(spaces, [_mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax) for _ in 1:Uc])
+            alg = MPSKit.VUMPS(; maxiter = maxiters, tol = energy_tol, verbosity = verbose ? 1 : 0, finalize = vumps_finalize)
+            # Solve the first vacuum, biased to background charge n by `attenuateLinks`.
+            ψ1, envs1, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(bg_target(n), Uc), attenuation), H, alg)
+            if fsym
+                # flavor_sym: the two θ=π vacua differ by one unit of background charge = a fundamental
+                # of SU(F) (odd n-ality), so NO charge relabelling (reflection) connects them — the
+                # domain wall genuinely carries a fundamental. Solve the second vacuum independently,
+                # biased to n+1. Because the reflection no longer fixes the two vacua's relative phase,
+                # the soliton dispersion minimum is shifted OFF k=0 (the wall carries the crystal
+                # momentum of the one-staggered-site translation relating the vacua); scan `momentum`
+                # to locate the band minimum / rest soliton. (Its energy matches the default rep.)
+                ψ2, envs2, _ = MPSKit.find_groundstate(attenuateLinks(ψ₀, fill(bg_target(n + 1), Uc), attenuation), H, alg)
+            else
+                # default per-flavor layout: build v2 by charge conjugation of v1 (a one-staggered-site
+                # translation = shift by F MPSKit sites), which fixes the relative phase (min at k=0)
+                # and is cheaper than a second solve. See `_charge_conjugate_vacuum`.
+                ψ2 = _charge_conjugate_vacuum(ψ1, n, hamiltonian.lattice.F)
+                envs2 = MPSKit.environments(ψ2, H)
+            end
 
-        v1, v2 = MPSKitState(hamiltonian, ψ1), MPSKitState(hamiltonian, ψ2)
+            v1, v2 = MPSKitState(hamiltonian, ψ1), MPSKitState(hamiltonian, ψ2)
+        else
+            # Reuse a cached vacuum pair (v1, v2) — skip both VUMPS solves and just rebuild the
+            # environments needed by the quasiparticle ansatz.
+            v1, v2 = _unpack_cached_vacua(hamiltonian, groundstate)
+            ψ1, ψ2 = v1.psi, v2.psi
+            envs1, envs2 = MPSKit.environments(ψ1, H), MPSKit.environments(ψ2, H)
+        end
         # The two θ=π vacua must differ (opposite background fields, ±1/2). If `attenuateLinks`
         # failed to separate them, VUMPS lands on the same vacuum and the "soliton" is spurious.
         isapprox(electricfields(v1), electricfields(v2); atol = 1e-3) &&
@@ -590,14 +673,23 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
 
     states = Vector{Any}(undef, nstates)   # entries may be a QP, or (for a momentum list) a list of QPs
     if isinf(hamiltonian.lattice.N)
-        ψ₀ = MPSKit.InfiniteMPS(spaces, [_mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
-        if !hamiltonian.lattice.flavor_sym && abs(hamiltonian.lattice.θ2π[1] - 0.5) < 0.1
-            ψ₀ = attenuateLinks(ψ₀, hamiltonian.lattice.θ2π[1] < 0.5 ? [U1Irrep(0), U1Irrep(0)] : [U1Irrep(-1), U1Irrep(-1)], 0.01)
+        if groundstate === nothing
+            ψ₀ = MPSKit.InfiniteMPS(spaces, [_mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax) for _ in 1:length(spaces)]) #TODO: add attenuation near theta = pi
+            if !hamiltonian.lattice.flavor_sym && abs(hamiltonian.lattice.θ2π[1] - 0.5) < 0.1
+                ψ₀ = attenuateLinks(ψ₀, hamiltonian.lattice.θ2π[1] < 0.5 ? [U1Irrep(0), U1Irrep(0)] : [U1Irrep(-1), U1Irrep(-1)], 0.01)
+            end
+            alg = MPSKit.VUMPS(; maxiter=maxiters, tol=energy_tol, verbosity=verbose ? 1 : 0, finalize = vumps_finalize)
+            ψ, envs, _ = MPSKit.find_groundstate(ψ₀, H, alg)
+            states[1] = MPSKitState(hamiltonian, ψ)
+        else
+            # Reuse a cached ground state — skip VUMPS and just rebuild the environments the
+            # quasiparticle ansatz needs.
+            gs   = _unpack_cached_groundstate(hamiltonian, groundstate; infinite = true)
+            ψ    = gs.psi
+            envs = MPSKit.environments(ψ, H)
+            states[1] = gs
         end
-        alg = MPSKit.VUMPS(; maxiter=maxiters, tol=energy_tol, verbosity=verbose ? 1 : 0, finalize = vumps_finalize)
-        ψ, envs, _ = MPSKit.find_groundstate(ψ₀, H, alg)
-        states[1] = MPSKitState(hamiltonian, ψ)
-        
+
         if nstates > 1
             isnothing(momentum) && (momentum = 0.0)
             islist = momentum isa AbstractVector
@@ -627,19 +719,30 @@ function loweststates(hamiltonian::MPSKitOperator, nstates::Int;
             end
             split = ψ -> _split_defect_mps(ψ, lat, hamiltonian.defects)
         end
-        ψ₀ = MPSKit.FiniteMPS(rand, ComplexF64, spc, _mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax); right = _mpskit_right_space(hamiltonian.lattice, total_defect))
         alg = MPSKit.DMRG2(; maxiter=maxiters, tol=energy_tol, trscheme = trunctol(; rtol = cutoff), verbosity=verbose ? 1 : 0)
-        # A single DMRG2 optimisation grows the bond dimension, but its energy-difference
-        # convergence can park at a shallow stationary point: the energy matches the exact GS to
-        # ~1e-9 while local observables (densities, occupations) are still off by ~1e-4, and this
-        # floor does NOT move when `energy_tol`/`cutoff` are tightened. Restarting DMRG2 from the
-        # converged state (with fresh environments) escapes the plateau and drives observables to
-        # machine precision — worst density-vs-ED ratio ~1e-8 across seeds, versus ~2e-4 with a
-        # single pass. (Single-site DMRG would polish faster but is unsupported by the LEMPO's
-        # Jordan-MPO AC derivative when hopping channels are `missing` at the boundary.)
-        ψ, = MPSKit.find_groundstate(ψ₀, Huse, alg)
-        ψ, = MPSKit.find_groundstate(ψ,  Huse, alg)
-        states[1] = MPSKitState(hamiltonian, split(ψ), hamiltonian.defects)
+        if groundstate === nothing
+            ψ₀ = MPSKit.FiniteMPS(rand, ComplexF64, spc, _mpskit_bond_space(hamiltonian.lattice, initiallinkdim, initial_Lmax); right = _mpskit_right_space(hamiltonian.lattice, total_defect))
+            # A single DMRG2 optimisation grows the bond dimension, but its energy-difference
+            # convergence can park at a shallow stationary point: the energy matches the exact GS to
+            # ~1e-9 while local observables (densities, occupations) are still off by ~1e-4, and this
+            # floor does NOT move when `energy_tol`/`cutoff` are tightened. Restarting DMRG2 from the
+            # converged state (with fresh environments) escapes the plateau and drives observables to
+            # machine precision — worst density-vs-ED ratio ~1e-8 across seeds, versus ~2e-4 with a
+            # single pass. (Single-site DMRG would polish faster but is unsupported by the LEMPO's
+            # Jordan-MPO AC derivative when hopping channels are `missing` at the boundary.)
+            ψ, = MPSKit.find_groundstate(ψ₀, Huse, alg)
+            ψ, = MPSKit.find_groundstate(ψ,  Huse, alg)
+            states[1] = MPSKitState(hamiltonian, split(ψ), hamiltonian.defects)
+        else
+            # Reuse a cached ground state. The cached `MPSKitState` stores the split (defect-visible)
+            # MPS, but the excitation solver runs in the fused representation, so re-fuse first when
+            # there are defects (`split`'s inverse). Cheap and exact — the defect site is
+            # entanglement-free.
+            gs = _unpack_cached_groundstate(hamiltonian, groundstate; infinite = false)
+            ψ  = isempty(hamiltonian.defects) ? gs.psi :
+                 _fuse_defect_mps(gs.psi, hamiltonian.lattice, hamiltonian.defects)
+            states[1] = gs
+        end
 
         if nstates > 1
             isnothing(momentum) || throw(ArgumentError("Momentum-resolved excitations not supported for finite lattices"))

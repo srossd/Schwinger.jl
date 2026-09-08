@@ -69,4 +69,12 @@ end
     @testset "Adaptive window growth" begin
         include("grow_window.jl")
     end
+
+    @testset "Momentum density" begin
+        include("momentum_density.jl")
+    end
+end
+
+@testset "Cached ground state reuse" begin
+    include("cached_groundstate.jl")
 end
