@@ -808,6 +808,43 @@ function energygap(hamiltonian::SchwingerOperator; kwargs...)
 end
 
 """
+    dispersion(H::MPSKitOperator, momenta; band = 1, kwargs...)
+
+Excitation energies `E_band(p)` of the `band`-th quasiparticle band at each physical momentum in
+`momenta` (in units of the coupling `g`, as elsewhere in the code). Returns a vector aligned with
+`momenta`. A single VUMPS vacuum solve is shared across all momenta — the whole list is threaded
+through one [`loweststates`](@ref) call — so this is much cheaper than solving each momentum
+separately. `kwargs` are forwarded to `loweststates` (e.g. `groundstate` to reuse a cached vacuum,
+`bonddim`, `cutoff`). Infinite lattice only.
+
+See also [`groupvelocity`](@ref).
+"""
+function dispersion(H::MPSKitOperator, momenta::AbstractVector; band::Int = 1, kwargs...)
+    isinf(H.lattice.N) || throw(ArgumentError("dispersion requires an infinite lattice (MPSKit backend)"))
+    band ≥ 1 || throw(ArgumentError("band must be ≥ 1 (band 1 = the lowest quasiparticle)"))
+    res = loweststates(H, band + 1; momentum = collect(momenta), kwargs...)
+    qps = res[band + 1]   # a momentum *list* ⇒ a list of QPs, one per requested momentum
+    return [energy(q) for q in qps]
+end
+
+"""
+    groupvelocity(H::MPSKitOperator, p; dp = 0.05, band = 1, kwargs...)
+
+Group velocity `v_g = dE_band/dp` of the `band`-th quasiparticle band at physical momentum `p`, by a
+central finite difference with step `dp` (both `p` and `dp` in units of the coupling `g`). The band
+is solved at `p ± dp` sharing one VUMPS vacuum solve. `kwargs` are forwarded to [`loweststates`](@ref)
+(e.g. `groundstate` to reuse a cached vacuum). Choose `dp` small enough to resolve the local slope
+but large enough to stay above the excitation solver's noise. Infinite lattice only.
+
+See also [`dispersion`](@ref).
+"""
+function groupvelocity(H::MPSKitOperator, p::Real; dp::Real = 0.05, band::Int = 1, kwargs...)
+    dp > 0 || throw(ArgumentError("dp must be positive"))
+    Em, Ep = dispersion(H, [p - dp, p + dp]; band = band, kwargs...)
+    return (Ep - Em) / (2dp)
+end
+
+"""
 `expectation(op, state)`
 
 Return the expectation value of the operator `op` in `state`.
@@ -940,6 +977,154 @@ end
 
 function Base.:*(op::MPSKitOperator, state::MPSKitState)
     return act(op, state)
+end
+
+# =============================================================================
+# Quench / re-host: carry a wavefunction over to a new Hamiltonian
+# =============================================================================
+
+"""
+    rehost(state, H)
+    quench(state, H)
+
+Re-host `state`'s wavefunction under a new Hamiltonian `H` of the **same backend**, returning a
+new state that carries `H` while keeping the original defects and (ED) charge sector. This is the
+sudden-quench primitive — prepare `|ψ⟩` under one Hamiltonian and evolve it under another:
+
+```julia
+gs      = groundstate(H0)
+quenched = rehost(gs, H1)          # same |ψ⟩, now hosted by H1
+ψt, obs  = evolve(quenched, t)     # evolves under H1
+```
+
+`quench` is an alias for `rehost`. The wavefunction data is shared (not copied), so mutate the
+result's `.psi`/`.coeffs` only if you no longer need the original. `H` must describe the same
+lattice geometry as `state` (and, for ED, the same Hilbert-space sector — same `L_max`, `universe`
+and net charge); only the couplings may differ.
+"""
+function rehost(state::EDState, H::EDOperator)
+    size(H.matrix, 1) == length(state.coeffs) ||
+        throw(ArgumentError("rehost: new Hamiltonian's Hilbert dimension $(size(H.matrix, 1)) ≠ " *
+                            "state's $(length(state.coeffs)) — the two are in different sectors " *
+                            "(check L_max / universe / net charge)"))
+    return EDState(H, state.coeffs, state.defects, state.net_charge)
+end
+rehost(state::ITensorState, H::ITensorOperator) = ITensorState(H, state.psi, state.defects)
+rehost(state::MPSKitState,  H::MPSKitOperator)  = MPSKitState(H, state.psi, state.defects)
+
+"""
+    quench(state, H)
+
+Alias for [`rehost`](@ref): re-host `state` under a new Hamiltonian `H` for sudden-quench dynamics.
+"""
+quench(state::SchwingerState, H::SchwingerOperator) = rehost(state, H)
+
+# =============================================================================
+# Normalization
+# =============================================================================
+
+"""
+    normalize(state)  ->  new normalized state
+    normalize!(state) ->  state, normalized in place
+
+Return `state` rescaled to unit norm (`normalize` makes a fresh state; `normalize!` mutates the
+wavefunction in place and returns it). Useful after [`act`](@ref), which returns an *unnormalized*
+`O|ψ⟩`. For an infinite (`InfiniteMPS`) state this is a no-op (a VUMPS state is already gauge-
+normalized). Extends `LinearAlgebra.normalize`/`normalize!`.
+"""
+function LinearAlgebra.normalize!(state::EDState)
+    state.coeffs ./= norm(state.coeffs)
+    return state
+end
+LinearAlgebra.normalize(state::EDState) =
+    EDState(state.hamiltonian, state.coeffs ./ norm(state.coeffs), state.defects, state.net_charge)
+
+function LinearAlgebra.normalize!(state::ITensorState)
+    normalize!(state.psi)
+    return state
+end
+LinearAlgebra.normalize(state::ITensorState) =
+    ITensorState(state.hamiltonian, normalize!(copy(state.psi)), state.defects)
+
+function LinearAlgebra.normalize!(state::MPSKitState)
+    state.psi isa MPSKit.InfiniteMPS && return state
+    normalize!(state.psi)
+    return state
+end
+LinearAlgebra.normalize(state::MPSKitState) =
+    state.psi isa MPSKit.InfiniteMPS ? state :
+    MPSKitState(state.hamiltonian, normalize!(copy(state.psi)), state.defects)
+
+# =============================================================================
+# Persistence: savestate / loadstate  (JLD2)
+# =============================================================================
+
+_backend_tag(::EDState)        = :ED
+_backend_tag(::ITensorState)   = :ITensors
+_backend_tag(::MPSKitState)    = :MPSKit
+_backend_tag(::EDOperator)     = :ED
+_backend_tag(::ITensorOperator)= :ITensors
+_backend_tag(::MPSKitOperator) = :MPSKit
+
+# Lattice geometry fingerprint stored alongside the wavefunction so `loadstate` can reject a
+# Hamiltonian describing a different lattice. `N` may be `Inf` (infinite lattice); that compares fine.
+_state_fingerprint(latt::Lattice) = (latt.N, latt.F, latt.q)
+
+"""
+    savestate(path, state)
+
+Serialize `state` to `path` as a JLD2 file, round-tripping through [`loadstate`](@ref). Stored are
+the wavefunction, the defect metadata, and (for ED) the charge sector — plus a backend tag and a
+lattice fingerprint `(N, F, q)` used to validate the Hamiltonian on reload.
+
+The Hamiltonian itself is **not** stored (it is large and cheaply rebuilt): reload with the
+Hamiltonian that should host the state, `state = loadstate(path, H)`, where `H` is built from the
+same lattice/defects. Returns `path`.
+
+```julia
+savestate("gs.jld2", groundstate(H))
+gs = loadstate("gs.jld2", H)
+```
+"""
+function savestate(path::AbstractString, state::EDState)
+    JLD2.jldsave(path; backend = :ED, psi = state.coeffs, defects = state.defects,
+                 net_charge = state.net_charge, fingerprint = _state_fingerprint(lattice(state)))
+    return path
+end
+function savestate(path::AbstractString, state::ITensorState)
+    JLD2.jldsave(path; backend = :ITensors, psi = state.psi, defects = state.defects,
+                 fingerprint = _state_fingerprint(lattice(state)))
+    return path
+end
+function savestate(path::AbstractString, state::MPSKitState)
+    JLD2.jldsave(path; backend = :MPSKit, psi = state.psi, defects = state.defects,
+                 fingerprint = _state_fingerprint(lattice(state)))
+    return path
+end
+
+_rebuild_state(H::EDOperator, d)      = EDState(H, ComplexF64.(d["psi"]), d["defects"], d["net_charge"])
+_rebuild_state(H::ITensorOperator, d) = ITensorState(H, d["psi"], d["defects"])
+_rebuild_state(H::MPSKitOperator, d)  = MPSKitState(H, d["psi"], d["defects"])
+
+"""
+    loadstate(path, H)
+
+Reconstruct the state saved at `path` by [`savestate`](@ref), hosting it under the Hamiltonian `H`
+(which must be of the matching backend and lattice). The file supplies the wavefunction and defects;
+`H` supplies the operator/lattice. Throws an `ArgumentError` if the stored backend or lattice
+fingerprint `(N, F, q)` does not match `H`.
+"""
+function loadstate(path::AbstractString, H::SchwingerOperator)
+    d = JLD2.load(path)
+    stored = d["backend"]
+    want   = _backend_tag(H)
+    stored === want ||
+        throw(ArgumentError("loadstate: file was saved from the $stored backend, but H is $want"))
+    fp    = get(d, "fingerprint", nothing)
+    wantf = _state_fingerprint(H.lattice)
+    (fp === nothing || fp == wantf) ||
+        throw(ArgumentError("loadstate: stored lattice fingerprint $fp ≠ Hamiltonian's $wantf"))
+    return _rebuild_state(H, d)
 end
 
 """

@@ -271,6 +271,27 @@ EnergyCurrent(lattice::Lattice, site::Int, ::ITensorsBackend; kwargs...) = ITens
 EnergyCurrent(lattice::Lattice, site::Int, ::MPSKitBackend; kwargs...) = MPSKitEnergyCurrent(lattice, site; kwargs...)
 
 # =============================================================================
+# MomentumDensity (matter momentum density p_n = T⁰¹ at site n)
+# =============================================================================
+
+"""
+    MomentumDensity(lattice, site; backend=nothing, ...)
+
+Construct the matter momentum density `p_n = T⁰¹ = (-i/4a)(χ†_n U_n U_{n+1} χ_{n+2} − h.c.)` at
+`site` `n`.  The total momentum is `Σ_n p_n`; on a wavepacket window use
+[`momentumdensities`](@ref)/[`totalmomentum`](@ref).  Distinct from [`EnergyCurrent`](@ref) (the
+*energy* current, on the other sublattice with the mass pieces).  Valid for `1 ≤ site ≤ N-2`.
+"""
+function MomentumDensity(lattice::Lattice, site::Int; backend::Union{Symbol,Backend,Nothing}=nothing, kwargs...)
+    backend = isnothing(backend) ? get_default_backend() : resolve_backend(backend)
+    return MomentumDensity(lattice, site, backend; kwargs...)
+end
+
+MomentumDensity(lattice::Lattice, site::Int, ::EDBackend; kwargs...) = EDMomentumDensity(lattice, site; kwargs...)
+MomentumDensity(lattice::Lattice, site::Int, ::ITensorsBackend; kwargs...) = ITensorMomentumDensity(lattice, site; kwargs...)
+MomentumDensity(lattice::Lattice, site::Int, ::MPSKitBackend; kwargs...) = MPSKitMomentumDensity(lattice, site; kwargs...)
+
+# =============================================================================
 # AverageElectricField
 # =============================================================================
 

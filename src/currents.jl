@@ -297,3 +297,240 @@ function energycurrents(state::MPSKitState)
         return [real(expectation(MPSKitEnergyCurrent(lat, s; universe = u), state)) for s in 2:Int(lat.N)-1]
     end
 end
+
+# =============================================================================
+# Momentum density  p_n = T⁰¹  (matter/canonical momentum density)
+#
+#     p_n = (-i/4a) (χ†_n U_n U_{n+1} χ_{n+2} − h.c.)
+#
+# The total momentum is P = Σ_n p_n (the 1/a is already carried by each p_n).  The
+# gauge-invariant bilinear χ†_n U_n U_{n+1} χ_{n+2} — a length-2 fermion hop across two
+# links, on the SAME staggered sublattice as site n — is exactly the length-2 Wilson
+# line `WilsonLine(n → n+2)` (Jordan–Wigner σᶻ string on site n+1 + the two gauge links
+# U_n U_{n+1}).  So the operator reuses the validated `WilsonLine` on every backend, and
+# `p_n = (-i/4a)(W − W†)` is manifestly Hermitian.
+#
+# This is DISTINCT from `EnergyCurrent` (also written T⁰¹, but the *energy* current):
+# that one is the length-2 hop on the OTHER sublattice (n−1 → n+1), carries a 1/4a²
+# coefficient, and adds the (m_lat) mass pieces.  `MomentumDensity` is the pure matter
+# momentum density: same-sublattice hop, coefficient 1/4a, no mass term.  For a bound
+# state (meson quasiparticle) Σ_n p_n is the total = centre-of-mass momentum.
+#
+# SIGN CONVENTION.  `WilsonLine` carries the backend-shared phase i^(finish−start) = i² =
+# −1 (ED's imaginary-hopping gauge), a real overall factor that is common to W and W†.
+# The physical sign of p_n is fixed by requiring a right-mover (lattice momentum k > 0) to
+# have ⟨P⟩ > 0; that calibration gives the prefactor `_MOMDENS_SIGN` below (validated in
+# test/momentum_density.jl against the sharp-momentum QP dispersion 𝒫(k) ≈ k/a).
+# =============================================================================
+
+const _MOMDENS_SIGN = +1   # calibrated so a k>0 wavepacket has ⟨P⟩>0 (see test/momentum_density.jl)
+
+# W† for a length-ℓ Wilson line is the `conjugate = true` line of the same endpoints (the
+# real phase i^ℓ is common to both), so p_n = (-i/4a)(W − W†) = (-i/4a)(W_false − W_true).
+_momdens_prefactor(lattice::Lattice) = _MOMDENS_SIGN * (-im) / (4 * lattice.a)
+
+"""
+`EDMomentumDensity(lattice, site)`
+
+Momentum density `p_n = T⁰¹ = (-i/4a)(χ†_n U_n U_{n+1} χ_{n+2} − h.c.)` at `site` `n`, built from
+the length-2 Wilson line `WilsonLine(n → n+2)`.  The total momentum is `Σ_n` of these.  Requires a
+charge-neutral sector (the underlying `EDWilsonLine` is built at `in_charge = 0`).
+"""
+function EDMomentumDensity(lattice::Lattice, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0)
+    Wf = EDWilsonLine(lattice, false, 1, site, site + 2; L_max = L_max, universe = universe)
+    Wc = EDWilsonLine(lattice, true,  1, site, site + 2; L_max = L_max, universe = universe)
+    return _momdens_prefactor(lattice) * (Wf + (-1.0) * Wc)
+end
+
+"""
+`ITensorMomentumDensity(lattice, site)`
+
+Momentum density `p_n = T⁰¹ = (-i/4a)(χ†_n U_n U_{n+1} χ_{n+2} − h.c.)` at `site` `n` (ITensors),
+built from the length-2 Wilson line `WilsonLine(n → n+2)`.
+"""
+function ITensorMomentumDensity(lattice::Lattice, site::Int; L_max::Union{Nothing,Int} = nothing, universe::Int = 0)
+    Wf = ITensorWilsonLine(lattice, false, 1, site, site + 2; L_max = L_max, universe = universe)
+    Wc = ITensorWilsonLine(lattice, true,  1, site, site + 2; L_max = L_max, universe = universe)
+    return _momdens_prefactor(lattice) * (Wf + (-1.0) * Wc)
+end
+
+"""
+`MPSKitMomentumDensity(lattice, site)`
+
+Momentum density `p_n = T⁰¹ = (-i/4a)(χ†_n U_n U_{n+1} χ_{n+2} − h.c.)` at `site` `n` (MPSKit),
+built from the length-2 Wilson line `WilsonLine(n → n+2)`.  Finite lattice only — on a wavepacket
+window use [`momentumdensities`](@ref), which contracts the local 3-site operator directly.
+
+See also [`momentumdensities`](@ref), [`totalmomentum`](@ref), and [`EnergyCurrent`](@ref) (the
+distinct *energy* current on the other sublattice).
+"""
+function MPSKitMomentumDensity(lattice::Lattice, site::Int; universe::Int = 0)
+    isinf(lattice.N) && throw(ArgumentError("per-site MPSKitMomentumDensity requires a finite lattice; " *
+                                            "use `momentumdensities` on a window"))
+    Wf = MPSKitWilsonLine(lattice, false, 1, site, site + 2; universe = universe)
+    Wc = MPSKitWilsonLine(lattice, true,  1, site, site + 2; universe = universe)
+    return _momdens_prefactor(lattice) * (Wf + (-1.0) * Wc)
+end
+
+# Local 3-site expectation ⟨A1 A2 A3 | O | A1 A2 A3⟩ for standard single-physical-leg MPS
+# tensors (the 3-site analogue of MPSKit.contract_mpo_expval2). Needed for a wavepacket window,
+# whose infinite-lattice Hamiltonian rules out `expectation_value(ψ, FiniteMPO)` — only these
+# local contractions work (see `_window_charge_current`). O[bra1 bra2 bra3; ket1 ket2 ket3].
+function _contract_mpo_expval3(A1, A2, A3, O, A1b = A1, A2b = A2, A3b = A3)
+    return @plansor conj(A1b[1 2; 3]) * conj(A2b[3 4; 5]) * conj(A3b[5 6; 7]) *
+                    O[2 4 6; 8 9 10] * A1[1 8; 11] * A2[11 9; 12] * A3[12 10; 7]
+end
+
+# Momentum density on window sites (n, n+1, n+2) as a *local 3-site operator tensor* contracted
+# with `_contract_mpo_expval3`.  Mirrors `_window_charge_current` (open/close charge transport,
+# antisymmetric in the transport direction, `i` prefactor) but spans TWO bonds, so the middle
+# site carries the Jordan–Wigner σᶻ string via `_wilson_jw_passthrough` (exactly as the length-2
+# `MPSKitWilsonLine` does).  Validated site-by-site against `MPSKitMomentumDensity` on a finite
+# lattice (test/momentum_density.jl).
+function _window_momentum_density(ψ, lat::Lattice, n::Int)
+    q = lat.q
+    Pn  = TensorKit.space(ψ.AC[n],   2)
+    Pn1 = TensorKit.space(ψ.AC[n+1], 2)
+    Pn2 = TensorKit.space(ψ.AC[n+2], 2)
+    raw = nothing
+    for (s, qs) in ((1.0, q), (-1.0, -q))
+        openT  = ones(ComplexF64, U1Space(0 => 1)  ⊗ Pn  ← Pn  ⊗ U1Space(qs => 1))
+        midT   = _wilson_jw_passthrough(Pn1, qs)          # σᶻ string + charge carry on site n+1
+        closeT = ones(ComplexF64, U1Space(qs => 1) ⊗ Pn2 ← Pn2 ⊗ U1Space(0 => 1))
+        @tensor t[-1 -2 -3; -4 -5 -6] := openT[1, -1; -4, 2] * midT[2, -2; -5, 3] *
+                                         closeT[3, -3; -6, 1]
+        raw = raw === nothing ? s * t : raw + s * t
+    end
+    # `WilsonLine(n → n+2)` carries the backend-shared phase i^(finish−start) = i² = −1 that puts
+    # the fermion bilinear in ED's imaginary-hopping convention; this hand-built transport tensor is
+    # in the raw real-hopping gauge and lacks it.  Multiply it in so the window path equals the
+    # per-site `MPSKitMomentumDensity` operator exactly (verified to ~1e-10 in the finite-lattice
+    # validation, where without it window = −operator).
+    op = _momdens_prefactor(lat) * (im^2) * raw
+    return real(_contract_mpo_expval3(ψ.AC[n], ψ.AR[n+1], ψ.AR[n+2], op))
+end
+
+"""
+`momentumdensities(state::MPSKitState)`
+
+The momentum density `p_n = T⁰¹` on each site `n = 1 … N−2` as a profile over the lattice; its sum
+is the total momentum `⟨P⟩` (see [`totalmomentum`](@ref)).  For `F = 1` with no defects this uses a
+local 3-site contraction (O(1) memory per site) of the length-2 charge-transport bilinear — the
+memory-light analogue of [`chargecurrents`](@ref) — and so also works on a wavepacket window
+(`WindowMPS`/`FiniteMPS`), where the per-site `FiniteMPO` operator cannot be applied.  It matches
+`MPSKitMomentumDensity` to machine precision.  Otherwise it falls back to the per-site operator
+(finite lattice only).
+"""
+function momentumdensities(state::MPSKitState)
+    lat = lattice(state)
+    if lat.F == 1 && isempty(state.defects) && (isfinite(lat.N) || _isfinitewindow(state))
+        ψ = state.psi
+        W = length(ψ)
+        nrm2 = ψ isa MPSKit.InfiniteMPS ? 1.0 : real(dot(ψ, ψ))
+        return [_window_momentum_density(ψ, lat, n) / nrm2 for n in 1:W-2]
+    elseif _isfinitewindow(state)
+        throw(ArgumentError("momentumdensities on a window supports F = 1 with no defects"))
+    else
+        u = state.hamiltonian.universe
+        return [real(expectation(MPSKitMomentumDensity(lat, n; universe = u), state)) for n in 1:Int(lat.N)-2]
+    end
+end
+
+"""
+`totalmomentum(state::MPSKitState)`
+
+The total momentum `⟨P⟩ = Σ_n ⟨p_n⟩` of `state`, the sum of the [`momentumdensities`](@ref).  For a
+single-quasiparticle wavepacket this is the centre-of-mass momentum; at small lattice momentum it
+equals the physical momentum `p` the wavepacket was built at (up to O(k³) lattice-dispersion
+corrections).
+
+!!! note "This is the mean only"
+    `⟨P⟩` is the clean, vacuum-free first moment.  Do **not** read the *distribution* over total
+    momentum off the second moment `⟨(Σ_n p_n)²⟩`: summing a local density over a window imports the
+    vacuum's momentum fluctuations (extensive in the window size) and `Σ_n p_n` does not commute
+    with `H`, so `Var(P)` is dominated by a state-independent floor.  Obtain the distribution instead
+    as the crystal-momentum distribution pushed through the dispersion `𝒫(κ)` (the diagonal of this
+    operator on sharp-momentum states).
+
+See also [`momentumdensities`](@ref), [`MomentumDensity`](@ref).
+"""
+totalmomentum(state::MPSKitState) = sum(momentumdensities(state))
+
+# =============================================================================
+# Generic cross-backend current / energy-current / momentum profiles (ED, ITensors)
+#
+# The MPSKit methods above use a memory-light local contraction (and support windows); ED and
+# ITensors have no such shortcut, so these simply loop the validated per-bond / per-site operator
+# (`ChargeCurrent`/`EnergyCurrent`/`MomentumDensity`) over the lattice. Their purpose is coverage
+# parity — so `chargecurrents`/`energycurrents`/`momentumdensities` return a whole-lattice profile
+# on *every* backend, which matters for ED↔MPSKit cross-checks. Finite lattice only.
+#
+# Ranges match the operators' domains of validity: charge current on bonds 1..N-1, energy current
+# on interior sites 2..N-1, momentum density on sites 1..N-2 (see the operator docstrings).
+# =============================================================================
+
+"""
+`chargecurrents(state::EDState)` / `chargecurrents(state::ITensorState)`
+
+The vector current j¹ on each bond `1..N-1`, by looping the per-bond `ChargeCurrent` operator —
+the ED/ITensors companion of the MPSKit [`chargecurrents`](@ref). Finite lattice only.
+"""
+function chargecurrents(state::EDState)
+    lat = lattice(state)
+    isinf(lat.N) && throw(ArgumentError("chargecurrents requires a finite lattice"))
+    kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe, charge = state.net_charge)
+    return [real(expectation(EDChargeCurrent(lat, b; kw...), state)) for b in 1:Int(lat.N)-1]
+end
+function chargecurrents(state::ITensorState)
+    lat = lattice(state)
+    isinf(lat.N) && throw(ArgumentError("chargecurrents requires a finite lattice"))
+    kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
+    return [real(expectation(ITensorChargeCurrent(lat, b; kw...), state)) for b in 1:Int(lat.N)-1]
+end
+
+"""
+`energycurrents(state::EDState)` / `energycurrents(state::ITensorState)`
+
+The energy current 𝒥 = T⁰¹ on each interior site `2..N-1`, by looping the per-site `EnergyCurrent`
+operator — the ED/ITensors companion of the MPSKit [`energycurrents`](@ref). Finite lattice only.
+"""
+function energycurrents(state::EDState)
+    lat = lattice(state)
+    isinf(lat.N) && throw(ArgumentError("energycurrents requires a finite lattice"))
+    kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe, charge = state.net_charge)
+    return [real(expectation(EDEnergyCurrent(lat, s; kw...), state)) for s in 2:Int(lat.N)-1]
+end
+function energycurrents(state::ITensorState)
+    lat = lattice(state)
+    isinf(lat.N) && throw(ArgumentError("energycurrents requires a finite lattice"))
+    kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
+    return [real(expectation(ITensorEnergyCurrent(lat, s; kw...), state)) for s in 2:Int(lat.N)-1]
+end
+
+"""
+`momentumdensities(state::EDState)` / `momentumdensities(state::ITensorState)`
+
+The momentum density p_n = T⁰¹ on each site `1..N-2`, by looping the per-site `MomentumDensity`
+operator — the ED/ITensors companion of the MPSKit [`momentumdensities`](@ref). Its sum is the
+total momentum ⟨P⟩ (see [`totalmomentum`](@ref)). Finite lattice only; a charge-neutral sector is
+required (the underlying Wilson line is built at `in_charge = 0`).
+"""
+function momentumdensities(state::EDState)
+    lat = lattice(state)
+    isinf(lat.N) && throw(ArgumentError("momentumdensities requires a finite lattice"))
+    kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
+    return [real(expectation(EDMomentumDensity(lat, n; kw...), state)) for n in 1:Int(lat.N)-2]
+end
+function momentumdensities(state::ITensorState)
+    lat = lattice(state)
+    isinf(lat.N) && throw(ArgumentError("momentumdensities requires a finite lattice"))
+    kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
+    return [real(expectation(ITensorMomentumDensity(lat, n; kw...), state)) for n in 1:Int(lat.N)-2]
+end
+
+"""
+`totalmomentum(state::EDState)` / `totalmomentum(state::ITensorState)`
+
+The total momentum ⟨P⟩ = Σ_n ⟨p_n⟩, the sum of the [`momentumdensities`](@ref). Finite lattice only.
+"""
+totalmomentum(state::Union{EDState,ITensorState}) = sum(momentumdensities(state))

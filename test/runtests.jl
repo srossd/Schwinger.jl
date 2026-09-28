@@ -78,3 +78,7 @@ end
 @testset "Cached ground state reuse" begin
     include("cached_groundstate.jl")
 end
+
+@testset "Quick-win helpers" begin
+    include("quickwins.jl")
+end

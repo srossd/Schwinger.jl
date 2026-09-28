@@ -21,7 +21,7 @@ export SchwingerOperator, EDOperator, ITensorOperator, MPSKitOperator
 # Unified API (backend-agnostic)
 export Hamiltonian, GaugeKinetic, Mass, Hopping, HoppingMass
 export WilsonLoop, WilsonLine, AverageElectricField
-export ChargeCurrent, EnergyCurrent
+export ChargeCurrent, EnergyCurrent, MomentumDensity
 
 # Backend-specific operators (for backward compatibility)
 export EDHamiltonian, ITensorHamiltonian, MPSKitHamiltonian
@@ -30,17 +30,22 @@ export ITensorGaugeKinetic, ITensorMass, ITensorHopping, ITensorHoppingMass
 export MPSKitGaugeKinetic, MPSKitMass, MPSKitHopping, MPSKitHoppingMass
 export EDChargeCurrent, ITensorChargeCurrent, MPSKitChargeCurrent
 export EDEnergyCurrent, ITensorEnergyCurrent, MPSKitEnergyCurrent
+export EDMomentumDensity, ITensorMomentumDensity, MPSKitMomentumDensity
 export EDWilsonLoop, ITensorWilsonLoop, MPSKitWilsonLoop
 export EDWilsonLine, ITensorWilsonLine, MPSKitWilsonLine
 export EDAverageElectricField, ITensorAverageElectricField, MPSKitAverageElectricField
 # State operations
 export lattice
 export loweststates, groundstate, energygap
+export dispersion, groupvelocity
 export flavor_singlet, flavor_adjoint
 export wavepacket, reflection_symmetric_gauge
 export grow_window, boundary_energy_excess, window_growth_condition
 export expectation, act
-export evolve
+export rehost, quench
+export normalize, normalize!
+export savestate, loadstate
+export evolve, standard_densities
 
 # Observables
 export energy, energy_density, energy_densities, occupation, occupations
@@ -50,6 +55,7 @@ export entanglement, entanglements
 export scalar, scalardensity, scalardensities
 export pseudoscalar, pseudoscalardensity, pseudoscalardensities
 export chargecurrents, energycurrents
+export momentumdensities, totalmomentum
 export emt
 
 # ITensors and ITensorMPS
@@ -76,6 +82,7 @@ using DataFrames
 
 # Utilities
 using Memoize
+using JLD2
 
 # Include files in dependency order
 include("./lattice.jl")

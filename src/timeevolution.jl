@@ -252,3 +252,61 @@ function evolve(state::MPSKitState, t::Real; nsteps::Int = 1, two_site::Bool = f
     return MPSKitState(state.hamiltonian, ψ, state.defects), obs
 
 end
+
+# =============================================================================
+# Standard observable menu for `evolve`
+# =============================================================================
+
+# name => (state, time) -> profile.  Each returns a plain Vector over the lattice, ready to store
+# in the `evolve` observer.  `:charge`/`:electricfield` are `vec`-flattened so the F=1 multi-flavor
+# matrix shape does not leak into trajectories.
+const _STANDARD_OBSERVABLES = Dict{Symbol,Function}(
+    :charge        => (ψ, t) -> real.(vec(charges(ψ))),
+    :occupation    => (ψ, t) -> occupations(ψ),
+    :electricfield => (ψ, t) -> real.(vec(electricfields(ψ))),
+    :energy        => (ψ, t) -> energy_densities(ψ),
+    :current       => (ψ, t) -> chargecurrents(ψ),
+    :energycurrent => (ψ, t) -> energycurrents(ψ),
+    :pseudoscalar  => (ψ, t) -> pseudoscalardensities(ψ),
+    :momentum      => (ψ, t) -> momentumdensities(ψ),
+)
+
+"""
+    standard_densities(names) -> Dict{String,Function}
+
+Build the `observable` dictionary for [`evolve`](@ref) from a list of standard density names, so
+drivers stop hand-writing the same `(ψ, t) -> real.(vec(charges(ψ)))` callbacks. Pass the result
+straight to `evolve(state, t; observable = standard_densities([...]))`; the observer then records
+each named profile at every step.
+
+`names` is any iterable of `Symbol`s (or strings). Available:
+
+- `:charge`        — site charge profile `real.(vec(charges(ψ)))`
+- `:occupation`    — site occupations
+- `:electricfield` — link electric fields
+- `:energy`        — bond/site energy densities ([`energy_densities`](@ref))
+- `:current`       — bond charge current ([`chargecurrents`](@ref))
+- `:energycurrent` — site energy current ([`energycurrents`](@ref))
+- `:pseudoscalar`  — site pseudoscalar density ([`pseudoscalardensities`](@ref))
+- `:momentum`      — site momentum density ([`momentumdensities`](@ref))
+
+Note that some entries have backend/geometry restrictions (e.g. `:energycurrent` and `:momentum`
+are finite-lattice only, and `:current`/`:energy` support wavepacket windows only on the MPSKit
+backend); pick names appropriate to the state you are evolving.
+
+```julia
+ψt, obs = evolve(state, 1.0; nsteps = 10,
+                 observable = standard_densities([:charge, :current, :energy]))
+```
+"""
+function standard_densities(names)
+    d = Dict{String,Function}()
+    for k in names
+        sym = Symbol(k)
+        haskey(_STANDARD_OBSERVABLES, sym) ||
+            throw(ArgumentError("unknown density $(repr(k)); available: " *
+                                join(sort(String.(collect(keys(_STANDARD_OBSERVABLES)))), ", ")))
+        d[String(sym)] = _STANDARD_OBSERVABLES[sym]
+    end
+    return d
+end
