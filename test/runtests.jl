@@ -98,3 +98,11 @@ end
 @testset "Detector pad option" begin
     include("detector_pad.jl")
 end
+
+@testset "apply_local on window" begin
+    include("apply_local.jl")
+end
+
+@testset "Two-point correlator and chargeprofile" begin
+    include("correlator_chargeprofile.jl")
+end

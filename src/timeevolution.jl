@@ -310,3 +310,68 @@ function standard_densities(names)
     end
     return d
 end
+
+# =============================================================================
+# Real-time two-point correlator
+# =============================================================================
+
+"""
+    correlator2pt(vac, opA, opB, times; E0 = energy(vac; warn=false),
+                  connected = false, nsteps = 1, kwargs...) -> Vector{ComplexF64}
+
+The real-time two-point function
+
+    C(t) = ⟨vac| A(t) B(0) |vac⟩ = e^{iE₀t} ⟨vac| A e^{-iHt} B |vac⟩
+
+at each `t` in `times`, with `A(t) = e^{iHt} A e^{-iHt}` the Heisenberg-evolved `opA`. Built from the
+package's own `act` / `evolve` / `dot` on whatever backend `vac` uses. The trivial ground-state phase
+is removed by the vacuum factor `e^{iE₀t}` with `E₀ = ⟨vac|H|vac⟩` (pass `E0` to override — e.g. for a
+window state whose extensive energy is not accurately given by `energy`).
+
+`opB` is applied to the ket; `opA` is applied to the bra, so the computed object is
+`⟨vac| opA† e^{-iHt} opB |vac⟩ · e^{iE₀t}` — for a Hermitian density/current `opA† = opA` (the common
+case). Set `connected = true` to subtract the disconnected `⟨opA⟩⟨opB⟩` (the `t`-independent plateau).
+
+`times` must be sorted and non-negative; the state is evolved incrementally between grid points
+(`nsteps` TDVP substeps per gap; extra `kwargs` — e.g. `two_site`, `maxlinkdim` — are forwarded to
+[`evolve`](@ref)). Works on any state/operators that `act` supports (finite lattices on every backend;
+a single insertion also works on a window via [`apply_local`](@ref) if you build the inserted state
+yourself and pass it as `opB`-image — see the note below).
+
+!!! note "Custom insertions"
+    If your insertion is a local operator on a wavepacket window (where `act(::MPSKitOperator, …)`
+    does not apply), precompute `braψ = apply_local(vac, opA_tensor, i)` and
+    `ketψ = apply_local(vac, opB_tensor, j)` and use [`correlator2pt_states`](@ref) directly.
+"""
+function correlator2pt(vac::SchwingerState, opA::SchwingerOperator, opB::SchwingerOperator,
+                       times::AbstractVector; E0::Real = energy(vac; warn = false),
+                       connected::Bool = false, nsteps::Int = 1, kwargs...)
+    disc = connected ? real(expectation(opA, vac)) * real(expectation(opB, vac)) : 0.0
+    return correlator2pt_states(act(opA, vac), act(opB, vac), times;
+                                E0 = E0, disconnected = disc, nsteps = nsteps, kwargs...)
+end
+
+"""
+    correlator2pt_states(bra0, ket0, times; E0, disconnected = 0, nsteps = 1, kwargs...)
+
+Lower-level driver behind [`correlator2pt`](@ref): given the already-prepared states
+`bra0 = A|vac⟩` and `ket0 = B|vac⟩`, return `⟨bra0| e^{-iHt} |ket0⟩ · e^{iE₀t} − disconnected` at
+each `t` in `times`. Use this when the insertions must be built by hand (e.g. [`apply_local`](@ref)
+on a wavepacket window). `times` must be sorted and non-negative.
+"""
+function correlator2pt_states(bra0::SchwingerState, ket0::SchwingerState, times::AbstractVector;
+                              E0::Real, disconnected::Real = 0.0, nsteps::Int = 1, kwargs...)
+    issorted(times) || throw(ArgumentError("times must be sorted (ascending)"))
+    isempty(times) && return ComplexF64[]
+    first(times) ≥ 0 || throw(ArgumentError("times must be non-negative"))
+    C = Vector{ComplexF64}(undef, length(times))
+    ψ = ket0
+    tprev = 0.0
+    for (i, t) in enumerate(times)
+        dt = float(t) - tprev
+        dt > 0 && (ψ = evolve(ψ, dt; nsteps = nsteps, kwargs...)[1])
+        C[i] = dot(bra0, ψ) * cis(E0 * float(t)) - disconnected
+        tprev = float(t)
+    end
+    return C
+end

@@ -1041,6 +1041,55 @@ function Base.:*(op::MPSKitOperator, state::MPSKitState)
 end
 
 # =============================================================================
+# apply_local: apply a local single-site operator, incl. on a wavepacket window
+# =============================================================================
+
+"""
+    apply_local(state::MPSKitState, op, site::Int)
+
+Apply the **local single-site** operator `op` to `state` at `site`, returning a new (generally
+**unnormalized**) `MPSKitState` `= op_site |state⟩`. `op` is a `TensorMap` on the physical space of
+`site` (codomain ← domain both the site's physical space `P`, e.g. a number/charge operator or a
+single-site phase); its physical space must match the site.
+
+Unlike [`act`](@ref)`(::MPSKitOperator, …)` — which multiplies the *whole-lattice* MPO into the
+state and therefore cannot be applied to a wavepacket `WindowMPS` (there is no
+`FiniteMPO * WindowMPS`) — `apply_local` edits only the single window tensor at `site` and leaves the
+infinite wings (`left_gs`/`right_gs`) untouched, so it works on a `WindowMPS`, a finite-lattice
+`FiniteMPS`, or a bare `FiniteMPS` window. The virtual bonds are unchanged (a site operator does not
+grow entanglement), so the `WindowMPS` boundary conditions are preserved exactly.
+
+Normalize the result with [`normalize!`](@ref) if you need `⟨·|·⟩ = 1` (e.g. before evolving);
+`⟨state | apply_local(state, op, site)⟩` gives the unnormalized matrix element `⟨op_site⟩·‖state‖²`.
+
+!!! note "Single-site only"
+    Multi-site local operators (a current or hopping bilinear on a bond) are not yet supported here;
+    those require an SVD re-split of the two-site tensor. Measure them with the memory-light
+    profiles ([`chargecurrents`](@ref) etc.) instead.
+"""
+function apply_local(state::MPSKitState, op::TensorKit.AbstractTensorMap, site::Int)
+    ψ = state.psi
+    ψ isa MPSKit.InfiniteMPS &&
+        throw(ArgumentError("apply_local requires a finite or window MPS, not an InfiniteMPS"))
+    (numout(op) == 1 && numin(op) == 1) ||
+        throw(ArgumentError("apply_local expects a single-site operator (a TensorMap P ← P)"))
+    W = length(ψ)
+    1 ≤ site ≤ W || throw(ArgumentError("site must be in 1 … $W (got $site)"))
+    TensorKit.space(op, 1) == TensorKit.space(ψ.AC[site], 2) ||
+        throw(ArgumentError("operator physical space $(TensorKit.space(op, 1)) does not match the space " *
+                            "at site $site ($(TensorKit.space(ψ.AC[site], 2)))"))
+    # Mixed-canonical representation with the orthogonality centre on site 1: the tensor list
+    # [AC[1], AR[2], …, AR[W]] contracts to |state⟩, so applying `op` to the physical leg at `site`
+    # yields exactly op_site|state⟩ (same identity `grow_window` relies on).
+    body = [i == 1 ? ψ.AC[1] : ψ.AR[i] for i in 1:W]
+    @plansor newA[-1 -2; -3] := op[-2; 1] * body[site][-1 1; -3]
+    body[site] = newA
+    window = FiniteMPS(body; normalize = false)
+    newpsi = ψ isa WindowMPS ? WindowMPS(ψ.left_gs, window, ψ.right_gs) : window
+    return MPSKitState(state.hamiltonian, newpsi, state.defects)
+end
+
+# =============================================================================
 # Quench / re-host: carry a wavefunction over to a new Hamiltonian
 # =============================================================================
 
@@ -1893,6 +1942,16 @@ function charges(state::SchwingerState)
     N = size(tot, 1)
     return (tot + (F .* [-1/2 + (-1)^(n)/2 for n=1:N])) .* lattice(state).q
 end
+
+"""
+    chargeprofile(state) -> Vector{Float64}
+
+The site charge profile as a plain 1-D real vector, `real.(vec(charges(state)))`. This flattens the
+`N×F` matrix that [`charges`](@ref) returns (and drops the negligible imaginary part), so `F = 1`
+code can stop repeating the `real.(vec(charges(ψ)))` boilerplate. For `F > 1` the flavor charges are
+summed per staggered site (as in `charges`), giving one value per site.
+"""
+chargeprofile(state::SchwingerState) = real.(vec(charges(state)))
 
 """
 `charge(state, site)`

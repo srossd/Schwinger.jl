@@ -42,15 +42,16 @@ export quasiparticle, vacuumof
 export flavor_singlet, flavor_adjoint
 export wavepacket, reflection_symmetric_gauge
 export grow_window, boundary_energy_excess, window_growth_condition
-export expectation, act
+export expectation, act, apply_local
 export rehost, quench
 export normalize, normalize!
 export savestate, loadstate
 export evolve, standard_densities
+export correlator2pt, correlator2pt_states
 
 # Observables
 export energy, energy_density, energy_densities, occupation, occupations
-export charge, charges
+export charge, charges, chargeprofile
 export L₀, electricfield, electricfields
 export entanglement, entanglements
 export scalar, scalardensity, scalardensities
