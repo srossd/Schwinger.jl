@@ -34,6 +34,10 @@ using Test
         include("currents.jl")
     end
 
+    @testset "Pseudoscalar density conventions" begin
+        include("pseudoscalar_convention.jl")
+    end
+
     @testset "Flavor symmetry" begin
         include("flavor_symmetry.jl")
     end
@@ -50,6 +54,10 @@ end
 
     @testset "Evolve checkpoint hook" begin
         include("evolve_checkpoint.jl")
+    end
+
+    @testset "Energy density convention" begin
+        include("energy_convention.jl")
     end
 end
 
@@ -81,4 +89,12 @@ end
 
 @testset "Quick-win helpers" begin
     include("quickwins.jl")
+end
+
+@testset "loweststates accessors" begin
+    include("loweststates_accessors.jl")
+end
+
+@testset "Detector pad option" begin
+    include("detector_pad.jl")
 end

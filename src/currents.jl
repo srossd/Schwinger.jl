@@ -275,15 +275,30 @@ function chargecurrents(state::MPSKitState)
     end
 end
 
+# Pad a natural-range detector profile `v` (covering sites `first_site : first_site+length(v)-1`) to a
+# site-aligned length-`N` vector, filling the boundary sites the operator is undefined on with `NaN`.
+# Opt-in convenience for whole-lattice sweeps/plots that want a value at every site index (see the
+# `pad` keyword on `energycurrents`/`momentumdensities`).
+function _pad_profile(v::AbstractVector, first_site::Int, N::Int)
+    out = fill(NaN, N)
+    out[first_site:first_site + length(v) - 1] .= v
+    return out
+end
+
 """
-`energycurrents(state)`
+`energycurrents(state; pad = false)`
 
 The energy current `𝒥 = T⁰¹` on each interior site (`2..N-1`), as a profile over the lattice, via
 the per-site `EnergyCurrent` operator.  See [`chargecurrents`](@ref) for the companion charge
 current.  Not supported on a wavepacket window (`𝒥_n = -i[b_n, b_{n-1}]` is a 3-site operator);
 measure on a finite lattice, or use `energy_densities` on the window.
+
+`𝒥` is only defined on interior sites, so by default this returns a length-`N-2` vector (sites
+`2..N-1`). Pass `pad = true` to instead get a site-aligned length-`N` vector with `NaN` at the two
+boundary sites — convenient for sweeping/plotting a detector across the whole lattice without manual
+range guards.
 """
-function energycurrents(state::MPSKitState)
+function energycurrents(state::MPSKitState; pad::Bool = false)
     lat = lattice(state)
     if _isfinitewindow(state)
         # 𝒥_n = -i[b_n, b_{n-1}] spans sites n-1,n,n+1 — a genuine 3-site operator that the local
@@ -293,8 +308,9 @@ function energycurrents(state::MPSKitState)
         throw(ArgumentError("energycurrents on a window is not yet supported (3-site operator); " *
                             "use a finite lattice, or energy_densities for the window"))
     else
-        u = state.hamiltonian.universe
-        return [real(expectation(MPSKitEnergyCurrent(lat, s; universe = u), state)) for s in 2:Int(lat.N)-1]
+        u = state.hamiltonian.universe; N = Int(lat.N)
+        vals = [real(expectation(MPSKitEnergyCurrent(lat, s; universe = u), state)) for s in 2:N-1]
+        return pad ? _pad_profile(vals, 2, N) : vals
     end
 end
 
@@ -420,19 +436,25 @@ memory-light analogue of [`chargecurrents`](@ref) — and so also works on a wav
 (`WindowMPS`/`FiniteMPS`), where the per-site `FiniteMPO` operator cannot be applied.  It matches
 `MPSKitMomentumDensity` to machine precision.  Otherwise it falls back to the per-site operator
 (finite lattice only).
+
+`p_n` is defined on sites `1..N-2`, so by default this returns a length-`N-2` vector. Pass
+`pad = true` for a site-aligned length-`N` vector with `NaN` at the two trailing boundary sites
+(convenient for whole-lattice sweeps/plots).
 """
-function momentumdensities(state::MPSKitState)
+function momentumdensities(state::MPSKitState; pad::Bool = false)
     lat = lattice(state)
     if lat.F == 1 && isempty(state.defects) && (isfinite(lat.N) || _isfinitewindow(state))
         ψ = state.psi
         W = length(ψ)
         nrm2 = ψ isa MPSKit.InfiniteMPS ? 1.0 : real(dot(ψ, ψ))
-        return [_window_momentum_density(ψ, lat, n) / nrm2 for n in 1:W-2]
+        vals = [_window_momentum_density(ψ, lat, n) / nrm2 for n in 1:W-2]
+        return pad ? _pad_profile(vals, 1, W) : vals
     elseif _isfinitewindow(state)
         throw(ArgumentError("momentumdensities on a window supports F = 1 with no defects"))
     else
-        u = state.hamiltonian.universe
-        return [real(expectation(MPSKitMomentumDensity(lat, n; universe = u), state)) for n in 1:Int(lat.N)-2]
+        u = state.hamiltonian.universe; N = Int(lat.N)
+        vals = [real(expectation(MPSKitMomentumDensity(lat, n; universe = u), state)) for n in 1:N-2]
+        return pad ? _pad_profile(vals, 1, N) : vals
     end
 end
 
@@ -493,18 +515,23 @@ end
 
 The energy current 𝒥 = T⁰¹ on each interior site `2..N-1`, by looping the per-site `EnergyCurrent`
 operator — the ED/ITensors companion of the MPSKit [`energycurrents`](@ref). Finite lattice only.
+Pass `pad = true` for a site-aligned length-`N` vector with `NaN` at the two boundary sites.
 """
-function energycurrents(state::EDState)
+function energycurrents(state::EDState; pad::Bool = false)
     lat = lattice(state)
     isinf(lat.N) && throw(ArgumentError("energycurrents requires a finite lattice"))
+    N = Int(lat.N)
     kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe, charge = state.net_charge)
-    return [real(expectation(EDEnergyCurrent(lat, s; kw...), state)) for s in 2:Int(lat.N)-1]
+    vals = [real(expectation(EDEnergyCurrent(lat, s; kw...), state)) for s in 2:N-1]
+    return pad ? _pad_profile(vals, 2, N) : vals
 end
-function energycurrents(state::ITensorState)
+function energycurrents(state::ITensorState; pad::Bool = false)
     lat = lattice(state)
     isinf(lat.N) && throw(ArgumentError("energycurrents requires a finite lattice"))
+    N = Int(lat.N)
     kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
-    return [real(expectation(ITensorEnergyCurrent(lat, s; kw...), state)) for s in 2:Int(lat.N)-1]
+    vals = [real(expectation(ITensorEnergyCurrent(lat, s; kw...), state)) for s in 2:N-1]
+    return pad ? _pad_profile(vals, 2, N) : vals
 end
 
 """
@@ -513,19 +540,24 @@ end
 The momentum density p_n = T⁰¹ on each site `1..N-2`, by looping the per-site `MomentumDensity`
 operator — the ED/ITensors companion of the MPSKit [`momentumdensities`](@ref). Its sum is the
 total momentum ⟨P⟩ (see [`totalmomentum`](@ref)). Finite lattice only; a charge-neutral sector is
-required (the underlying Wilson line is built at `in_charge = 0`).
+required (the underlying Wilson line is built at `in_charge = 0`). Pass `pad = true` for a
+site-aligned length-`N` vector with `NaN` at the two trailing boundary sites.
 """
-function momentumdensities(state::EDState)
+function momentumdensities(state::EDState; pad::Bool = false)
     lat = lattice(state)
     isinf(lat.N) && throw(ArgumentError("momentumdensities requires a finite lattice"))
+    N = Int(lat.N)
     kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
-    return [real(expectation(EDMomentumDensity(lat, n; kw...), state)) for n in 1:Int(lat.N)-2]
+    vals = [real(expectation(EDMomentumDensity(lat, n; kw...), state)) for n in 1:N-2]
+    return pad ? _pad_profile(vals, 1, N) : vals
 end
-function momentumdensities(state::ITensorState)
+function momentumdensities(state::ITensorState; pad::Bool = false)
     lat = lattice(state)
     isinf(lat.N) && throw(ArgumentError("momentumdensities requires a finite lattice"))
+    N = Int(lat.N)
     kw = (; L_max = state.hamiltonian.L_max, universe = state.hamiltonian.universe)
-    return [real(expectation(ITensorMomentumDensity(lat, n; kw...), state)) for n in 1:Int(lat.N)-2]
+    vals = [real(expectation(ITensorMomentumDensity(lat, n; kw...), state)) for n in 1:N-2]
+    return pad ? _pad_profile(vals, 1, N) : vals
 end
 
 """

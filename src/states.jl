@@ -844,6 +844,67 @@ function groupvelocity(H::MPSKitOperator, p::Real; dp::Real = 0.05, band::Int = 
     return (Ep - Em) / (2dp)
 end
 
+# =============================================================================
+# loweststates accessors — normalize the ordinary-vs-soliton / momentum-list nesting
+# =============================================================================
+
+"""
+    vacuumof(res; which = :first)
+
+Return the vacuum (ground) state from a [`loweststates`](@ref) result `res`, regardless of whether
+`res` came from an ordinary or a `solitons = true` run. `res[1]` is a single vacuum for an ordinary
+run, but a degenerate **pair** `(v1, v2)` at θ = π for a soliton run; this accessor returns a single
+state either way (`which = :first`/`:second` selects `v1`/`v2`; `:second` errors on an ordinary run,
+which has only one vacuum).
+
+See also [`quasiparticle`](@ref).
+"""
+function vacuumof(res::AbstractVector; which::Symbol = :first)
+    which in (:first, :second) || throw(ArgumentError("which must be :first or :second (got $(repr(which)))"))
+    isempty(res) && throw(ArgumentError("empty loweststates result"))
+    v = res[1]
+    if v isa Tuple                                 # soliton run: (v1, v2)
+        return which === :second ? v[2] : v[1]
+    end
+    which === :second &&
+        throw(ArgumentError("this is an ordinary (non-soliton) result with a single vacuum; use which=:first"))
+    return v
+end
+
+"""
+    quasiparticle(res, level; momentum = 1, kind = :particle)
+
+Return a single quasiparticle state from a [`loweststates`](@ref) result `res`, hiding the shape
+differences between run types:
+
+- ordinary single-momentum: `res[level]` is the QP state;
+- ordinary momentum-list: `res[level]` is a *vector* of QPs (one per momentum) — indexed by `momentum`;
+- `solitons = true`: `res[level]` (after the momentum index, if a list) is a **pair**
+  `(soliton, antisoliton)` — `kind = :particle`/`:antiparticle` (aliases `:soliton`/`:antisoliton`)
+  selects which.
+
+`level` is the index into `res` (`level = 1` is the vacuum — use [`vacuumof`](@ref) — so quasiparticles
+start at `level = 2`). Requesting `:antiparticle` on an ordinary band (which has no partner) errors.
+"""
+function quasiparticle(res::AbstractVector, level::Int; momentum::Int = 1, kind::Symbol = :particle)
+    kind in (:particle, :antiparticle, :soliton, :antisoliton) ||
+        throw(ArgumentError("kind must be :particle/:antiparticle (got $(repr(kind)))"))
+    2 ≤ level ≤ length(res) ||
+        throw(ArgumentError("level must be in 2 … $(length(res)) (level 1 is the vacuum — use vacuumof)"))
+    entry = res[level]
+    if entry isa AbstractVector                    # momentum list ⇒ one entry per momentum
+        1 ≤ momentum ≤ length(entry) ||
+            throw(ArgumentError("momentum index must be in 1 … $(length(entry)) (got $momentum)"))
+        entry = entry[momentum]
+    end
+    anti = kind in (:antiparticle, :antisoliton)
+    if entry isa Tuple                             # soliton run: (soliton, antisoliton)
+        return anti ? entry[2] : entry[1]
+    end
+    anti && throw(ArgumentError("this is an ordinary band with no antiparticle partner; use kind=:particle"))
+    return entry
+end
+
 """
 `expectation(op, state)`
 
@@ -1162,16 +1223,31 @@ function energy_density(state::Union{EDState,ITensorState,MPSKitState})
 end
 
 """
-`energy_density(state, site)`
+`energy_density(state, site; convention = :site)`
 
-Return the energy density (energy per unit length) at `site`: the electric energy on link
-`site`, the mass on site `site`, and the hopping (and hopping-mass) on the bond
-`(site, site+1)`, all divided by the lattice spacing `a`. Summing over all sites and
-multiplying by `a` gives the total energy (see [`energy_densities`](@ref)).
+Return a local energy density. Two conventions are available, and **they are different physical
+objects** — choose deliberately:
+
+- `:site` (default): the **site-centered** density on `site` (energy *per unit length*): the mass on
+  site `site` plus half of each neighbouring bond's electric + hopping (+ hopping-mass) energy, all
+  ÷ `a`. `Σ_site energy_density · a` = total energy. This is the convention for energy *profiles* and
+  plots.
+
+- `:bond`: the **bond-centered** density `h_n = ⟨GK(n)⟩ + ⟨Hop(n)⟩ + ½⟨M(n)⟩ + ½⟨M(n+1)⟩` on bond
+  `n = site` (an **extensive** energy, *not* ÷ `a`), defined on bonds `1 … N-1`. This is the density
+  that satisfies the exact lattice continuity `∂_t h_n = 𝒥_n − 𝒥_{n+1}` with the energy current
+  [`EnergyCurrent`](@ref)/[`energycurrents`](@ref). Requires `mprime = 0` and a finite lattice.
+
+!!! warning "The default `:site` density is NOT the partner of `EnergyCurrent`"
+    The site-centered `:site` density and the bond-centered `:bond` density differ by a lattice total
+    derivative: they give the same *total* energy but distribute it differently, so `∂_t` of the
+    `:site` density does **not** equal the energy-current divergence `𝒥_n − 𝒥_{n+1}` (it is off by an
+    O(1) amount). For any local energy-conservation / continuity check use `convention = :bond`.
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
-- `site::Int`: site.
+- `site::Int`: site (`:site`) or bond (`:bond`) index.
+- `convention::Symbol = :site`: `:site` or `:bond` (see above).
 """
 # The mass operator on `site` (an on-site term).
 _mass_op(state::EDState, site::Int) = EDMass(lattice(state), site; bare = false,
@@ -1224,10 +1300,32 @@ function _averaged_bond(b, site::Int, N::Int, boundary::Bool)
     return e
 end
 
-function energy_density(state::Union{EDState,ITensorState,MPSKitState}, site::Int)
+# Bond-centered energy density h_n = GK(n) + Hop(n) + ½M(n) + ½M(n+1) on bond n (extensive). This
+# is the density satisfying the exact lattice continuity ∂_t h_n = 𝒥_n − 𝒥_{n+1} with `EnergyCurrent`
+# (verified in test/currents.jl and test/energy_convention.jl). `_bond_energy` supplies GK + Hop
+# (+ HoppingMass, which vanishes at the required mprime = 0); the two half-masses are added on.
+function _bond_centered_energy(state::Union{EDState,ITensorState,MPSKitState}, n::Int)
+    return _bond_energy(state, n) +
+           0.5 * real(expectation(_mass_op(state, n),     state)) +
+           0.5 * real(expectation(_mass_op(state, n + 1), state))
+end
+
+function energy_density(state::Union{EDState,ITensorState,MPSKitState}, site::Int; convention::Symbol = :site)
+    convention in (:site, :bond) ||
+        throw(ArgumentError("convention must be :site or :bond (got $(repr(convention)))"))
     if state isa MPSKitState && lattice(state).flavor_sym
         throw(ArgumentError("per-site energy_density is not yet implemented for flavor_sym lattices; " *
                             "use energy(state) for the total energy"))
+    end
+    if convention === :bond
+        (state isa MPSKitState && _isfinitewindow(state)) &&
+            throw(ArgumentError(":bond energy_density on a wavepacket window is not supported " *
+                                "(its continuity is a 3-site relation); use a finite lattice"))
+        isinf(lattice(state).N) && throw(ArgumentError(":bond energy_density requires a finite lattice"))
+        N = Int(lattice(state).N)
+        1 ≤ site ≤ N - 1 ||
+            throw(ArgumentError(":bond energy_density is defined on bonds 1 … N-1 (got site $site)"))
+        return _bond_centered_energy(state, site)
     end
     if state isa MPSKitState && _isfinitewindow(state)
         return _energy_densities_window(state)[site]   # wavepacket on an infinite background
@@ -1308,15 +1406,30 @@ function _energy_densities_window(state::MPSKitState)
 end
 
 """
-`energy_densities(state)`
+`energy_densities(state; convention = :site)`
 
-Return the list of energy densities (energy per unit length) of `state` on sites 1 through
-N; their sum times the lattice spacing `a` is the total energy of the state.
+Return the profile of local energy densities of `state`. The `convention` selects the splitting
+(see [`energy_density`](@ref) for the full discussion — the two are **different physical objects**):
+
+- `:site` (default): the **site-centered** density (energy per unit length) on sites `1 … N`; its
+  sum × `a` is the total energy. Use for energy profiles/plots.
+- `:bond`: the **bond-centered** density `h_n = ⟨GK(n)⟩+⟨Hop(n)⟩+½⟨M(n)⟩+½⟨M(n+1)⟩` (extensive) on
+  bonds `1 … N-1`, the partner of [`energycurrents`](@ref) in `∂_t h_n = 𝒥_n − 𝒥_{n+1}`. Requires
+  `mprime = 0` and a finite lattice. **This** is the density for local energy-continuity checks — the
+  default `:site` profile is *not* (see the warning in [`energy_density`](@ref)).
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
+- `convention::Symbol = :site`: `:site` (length `N`) or `:bond` (length `N-1`).
 """
-function energy_densities(state::SchwingerState)
+function energy_densities(state::SchwingerState; convention::Symbol = :site)
+    convention in (:site, :bond) ||
+        throw(ArgumentError("convention must be :site or :bond (got $(repr(convention)))"))
+    if convention === :bond
+        isinf(lattice(state).N) && throw(ArgumentError(":bond energy_densities requires a finite lattice"))
+        N = Int(lattice(state).N)
+        return [energy_density(state, n; convention = :bond) for n in 1:N-1]
+    end
     if state isa MPSKitState && _isfinitewindow(state)
         return _energy_densities_window(state)            # batched: norm/bonds computed once
     end
@@ -1678,7 +1791,9 @@ end
 """
 `pseudoscalardensity(state, n)`
 
-Return the pseudoscalar density at site `n`.
+Return the site-symmetrized staggered pseudoscalar density `P_n = (1/a)·½(p(n) + p(n-1))` at site
+`n`, where `p(ℓ)` is the bare hopping-mass bond bilinear. See [`pseudoscalardensities`](@ref) for the
+exact operator and the caveat that `j¹ = κ(−1)ⁿ·P` does **not** give the vector current.
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
@@ -1727,11 +1842,22 @@ end
 """
 `pseudoscalardensities(state)`
 
-Return the list of pseudoscalar densities of `state` on sites 1 through N.
+Return the pseudoscalar density `P = ⟨ψ̄ iγ⁵ψ⟩` on sites `1 … N`.
+
+**Exact operator.** This is the **site-symmetrized staggered** pseudoscalar: with `p(n)` the *bare*
+hopping-mass bilinear on bond `n` (`HoppingMass(lattice, n; bare = true)`, which already carries the
+`(-1)^n` staggering), the value on site `s` is `P_s = (1/a)·½(p(s) + p(s-1))` — the average of the two
+bonds flanking the site. (`MPSKitState` computes the identical quantity via a local bond contraction;
+see the [`pseudoscalardensities(::MPSKitState)`](@ref) method.)
+
+!!! warning "The naive `j¹ = κ(−1)ⁿ · P` shortcut does NOT give the vector current"
+    Because `P_s` is *symmetrized* across the two neighbouring bonds, multiplying it by the staggered
+    sign `(−1)^n` does **not** reproduce the conserved vector current `j¹` — it yields a bond
+    *difference* instead. For the current use [`chargecurrents`](@ref) / [`ChargeCurrent`](@ref), which
+    are the un-symmetrized bond bilinears built to satisfy the continuity equation.
 
 # Arguments
 - `state::SchwingerState`: Schwinger model state.
-- `site::Int`: site.
 """
 function pseudoscalardensities(state::SchwingerState)
     N = isinf(lattice(state).N) ? 2 : Int(lattice(state).N)

@@ -38,6 +38,7 @@ export EDAverageElectricField, ITensorAverageElectricField, MPSKitAverageElectri
 export lattice
 export loweststates, groundstate, energygap
 export dispersion, groupvelocity
+export quasiparticle, vacuumof
 export flavor_singlet, flavor_adjoint
 export wavepacket, reflection_symmetric_gauge
 export grow_window, boundary_energy_excess, window_growth_condition
