@@ -42,7 +42,7 @@ export quasiparticle, vacuumof
 export flavor_singlet, flavor_adjoint
 export wavepacket, reflection_symmetric_gauge
 export grow_window, boundary_energy_excess, window_growth_condition
-export expectation, act, apply_local
+export expectation, act, apply_local, apply_wilsonline
 export rehost, quench
 export normalize, normalize!
 export savestate, loadstate

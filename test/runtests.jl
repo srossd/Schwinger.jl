@@ -114,3 +114,7 @@ end
 @testset "Window workflow: gs -> WindowMPS -> act -> evolve+grow" begin
     include("window_workflow.jl")
 end
+
+@testset "Wilson line on a window" begin
+    include("wilson_window.jl")
+end

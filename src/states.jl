@@ -1098,6 +1098,75 @@ function apply_local(state::MPSKitState, op::TensorKit.AbstractTensorMap, site::
     return MPSKitState(state.hamiltonian, newpsi, state.defects)
 end
 
+"""
+    apply_local(state::MPSKitState, op::MPSKitOperator)
+
+Apply a **bounded-support** operator `op` — built over a *finite* lattice whose length equals the
+window length `length(state.psi)` — to `state`, returning a new (generally **unnormalized**)
+`MPSKitState`. This is the multi-site companion of the single-site `apply_local`: it multiplies the
+operator's `FiniteMPO` into the window's inner `FiniteMPS` (`op.lempo * ψ.window`) and leaves the
+infinite wings (`left_gs`/`right_gs`) untouched, so it works on a wavepacket `WindowMPS` (as well as
+a finite/bare-window `FiniteMPS`) — which the whole-lattice `act(::MPSKitOperator, …)` cannot do.
+
+`op` must be a genuinely finite (bounded-support) operator — e.g. a Wilson line
+`WilsonLine(Lattice(W; F, q), …)` or a length-`W` `Mass`/current — whose physical spaces match the
+window site-by-site (the window must be aligned so its site 1 has the finite lattice's parity).
+For a Wilson line, use [`apply_wilsonline`](@ref), which builds the matching operator for you.
+Because a `FiniteMPO` has trivial boundary bonds and a Wilson line is charge-neutral, the window's
+boundary conditions are preserved.
+"""
+function apply_local(state::MPSKitState, op::MPSKitOperator)
+    ψ = state.psi
+    ψ isa MPSKit.InfiniteMPS &&
+        throw(ArgumentError("apply_local requires a finite or window MPS, not an InfiniteMPS"))
+    isinf(op.lattice.N) &&
+        throw(ArgumentError("apply_local(state, op) needs a finite (bounded-support) operator — its " *
+                            "lattice is infinite. Build it over `Lattice($(length(ψ)); F, q)`, or use " *
+                            "`apply_wilsonline` for a Wilson line."))
+    win = ψ isa WindowMPS ? ψ.window : ψ
+    Int(op.lattice.N) * (op.lattice.flavor_sym ? 1 : op.lattice.F) == length(win) ||
+        throw(ArgumentError("operator length $(op.lattice.N) does not match the window length $(length(win))"))
+    newwin = op.lempo * win
+    newpsi = ψ isa WindowMPS ? WindowMPS(ψ.left_gs, newwin, ψ.right_gs) : newwin
+    return MPSKitState(state.hamiltonian, newpsi, state.defects)
+end
+
+"""
+    apply_wilsonline(state::MPSKitState, start, finish; conjugate = false, flavor = 1)
+
+Apply the gauge-invariant Wilson line `χ†_start (U-string) χ_finish` to `state` at window sites
+`start … finish`, returning a new (generally **unnormalized**) `MPSKitState`. Works on a wavepacket
+`WindowMPS` (leaving the infinite wings untouched) as well as a finite/bare-window `FiniteMPS` — the
+multi-site analogue of the single-site `apply_local`. The Wilson-line MPO is built over a finite
+lattice matching the window (see [`apply_local`](@ref)`(state, op::MPSKitOperator)`), so the window
+must be aligned to the background unit cell (its site 1 having odd parity, as `WindowMPS(gs, W)` and
+`wavepacket` produce). `conjugate = true` gives the reversed line `χ†_finish … χ_start`.
+
+The Wilson line is charge-neutral, so the window's boundary conditions and total charge are preserved.
+Normalize the result with [`normalize!`](@ref) before evolving if you want unit norm.
+"""
+function apply_wilsonline(state::MPSKitState, start::Int, finish::Int;
+                          conjugate::Bool = false, flavor::Int = 1)
+    ψ = state.psi
+    ψ isa MPSKit.InfiniteMPS &&
+        throw(ArgumentError("apply_wilsonline requires a finite or window MPS, not an InfiniteMPS"))
+    lat = lattice(state); W = length(ψ)
+    (1 ≤ start ≤ W && 1 ≤ finish ≤ W) ||
+        throw(ArgumentError("start/finish must be in 1 … $W (got start=$start, finish=$finish)"))
+    lat.flavor_sym && throw(ArgumentError("apply_wilsonline does not yet support flavor_sym lattices"))
+    # Wilson-line MPO over a finite lattice matching the window's physical spaces (q, F set them; the
+    # line is independent of m/θ). Verify the window is aligned so the spaces match site-by-site.
+    latW = Lattice(W; F = lat.F, q = lat.q, a = lat.a)
+    spW = get_mpskit_spaces(latW)
+    for k in 1:W
+        TensorKit.space(ψ.AC[k], 2) == spW[k] ||
+            throw(ArgumentError("window physical space at site $k does not match a finite lattice of " *
+                                "length $W — the window must be aligned to an odd start site."))
+    end
+    wl = MPSKitWilsonLine(latW, conjugate, flavor, start, finish; universe = state.hamiltonian.universe)
+    return apply_local(state, wl)
+end
+
 # =============================================================================
 # Quench / re-host: carry a wavefunction over to a new Hamiltonian
 # =============================================================================
