@@ -1,11 +1,12 @@
-# apply_wilsonline / apply_local(::MPSKitOperator): apply a bounded-support Wilson line to a window.
-# Validation: ⟨vac| W(i→i+ℓ) |vac⟩ measured on a vacuum window, averaged over the odd- and even-start
-# sublattices, must equal the infinite Wilson-line automaton expectation on the vacuum (which the
-# code documents as exactly that two-site-translation average).
+# Applying a bounded-support operator to a window via window_lattice + apply_local(state, op).
+# Validation on a vacuum window with a length-1 Wilson line W(i→i+1) = χ†_i U χ_{i+1} (nonzero on the
+# vacuum): (a) same-sublattice translation invariance ⟨W(9→10)⟩ == ⟨W(11→12)⟩, and (b) the odd/even
+# start average equals the infinite Wilson-line automaton expectation (documented to be exactly that
+# two-site-translation average).
 using Schwinger, LinearAlgebra, Test
 using MPSKit, TensorKit
 
-@testset "apply_wilsonline on a window" begin
+@testset "apply_local(state, op) on a window (Wilson line)" begin
     lat = Lattice(Inf; F = 1, q = 2, a = 0.25, m = 0.5)
     H   = Hamiltonian(lat, MPSKitBackend())
     gsi = groundstate(H; bonddim = 16)
@@ -13,26 +14,26 @@ using MPSKit, TensorKit
     vac = MPSKitState(H, WindowMPS(gsi.psi, W))
     nrm2 = real(dot(vac, vac))
 
-    ℓ = 2
-    Wodd  = apply_wilsonline(vac, 9,  9 + ℓ)     # odd start
-    Weven = apply_wilsonline(vac, 10, 10 + ℓ)    # even start
-    @test Wodd.psi  isa WindowMPS && length(Wodd.psi)  == W   # wings preserved, bonds intact
-    @test Weven.psi isa WindowMPS && length(Weven.psi) == W
+    latW = window_lattice(vac)
+    @test latW isa Lattice
+    @test Int(latW.N) == W && latW.q == lat.q && latW.F == lat.F && latW.a == lat.a
 
-    val_odd  = dot(vac, Wodd)  / nrm2
-    val_even = dot(vac, Weven) / nrm2
-    val_window_avg = (val_odd + val_even) / 2
+    wl(i, j) = WilsonLine(latW, false, 1, i, j; backend = MPSKitBackend())
+    meas(i, j) = dot(vac, apply_local(vac, wl(i, j))) / nrm2      # ⟨vac| W(i→j) |vac⟩
 
-    # infinite Wilson-line automaton expectation on the vacuum = the odd/even-start average
-    val_inf = expectation(WilsonLine(lat, false, 1, 1, 1 + ℓ; backend = MPSKitBackend()), gsi)
+    W9  = apply_local(vac, wl(9, 10))
+    @test W9.psi isa WindowMPS && length(W9.psi) == W             # wings preserved, bonds intact
 
-    @test isapprox(val_window_avg, val_inf; rtol = 1e-4)
-    @test abs(imag(val_window_avg)) < 1e-6            # neutral bilinear ⇒ real on the vacuum
+    v9  = dot(vac, W9) / nrm2                                     # odd start (nonzero: hopping bilinear)
+    v11 = meas(11, 12)                                            # odd start, one unit cell over
+    v10 = meas(10, 11)                                            # even start
+    @test abs(v9) > 1e-3                                          # a genuine (nonzero) signal
+    @test isapprox(v9, v11; rtol = 1e-4)                         # same-sublattice translation invariance
 
-    # a length-1 (nearest-neighbour) line also works and stays a window
-    W1 = apply_wilsonline(vac, 9, 10)
-    @test W1.psi isa WindowMPS
+    # odd/even-start average == infinite Wilson-line automaton expectation on the vacuum
+    val_inf = expectation(WilsonLine(lat, false, 1, 1, 2; backend = MPSKitBackend()), gsi)
+    @test isapprox((v9 + v10) / 2, val_inf; atol = 1e-8, rtol = 1e-4)
 
-    # guard: an infinite-lattice operator is rejected by apply_local(state, op)
-    @test_throws ArgumentError apply_local(vac, H)   # H is the whole-lattice (infinite) operator
+    # guard: an infinite (whole-lattice) operator is rejected — must be built over window_lattice
+    @test_throws ArgumentError apply_local(vac, H)
 end
