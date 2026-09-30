@@ -106,3 +106,11 @@ end
 @testset "Two-point correlator and chargeprofile" begin
     include("correlator_chargeprofile.jl")
 end
+
+@testset "MPSKit energycurrents (local path)" begin
+    include("energy_local.jl")
+end
+
+@testset "Window workflow: gs -> WindowMPS -> act -> evolve+grow" begin
+    include("window_workflow.jl")
+end

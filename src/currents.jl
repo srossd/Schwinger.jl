@@ -288,10 +288,17 @@ end
 """
 `energycurrents(state; pad = false)`
 
-The energy current `𝒥 = T⁰¹` on each interior site (`2..N-1`), as a profile over the lattice, via
-the per-site `EnergyCurrent` operator.  See [`chargecurrents`](@ref) for the companion charge
-current.  Not supported on a wavepacket window (`𝒥_n = -i[b_n, b_{n-1}]` is a 3-site operator);
-measure on a finite lattice, or use `energy_densities` on the window.
+The energy current `𝒥 = T⁰¹` on each interior site (`2..N-1`), as a profile over the lattice.  See
+[`chargecurrents`](@ref) for the companion charge current.
+
+For `F = 1` (no defects) this measures `𝒥_n = -i[b_n, b_{n-1}]` as a **local 3-site contraction**
+(`_contract_mpo_expval3`, O(1) memory / O(D³) per site) instead of building the N−1 full-length
+per-site `FiniteMPO` operators and contracting each over the whole chain (which was O(N²)).  This
+both speeds up the finite-lattice profile dramatically and lets it run on a **wavepacket window**
+(`WindowMPS`/`FiniteMPS`), where the per-site `FiniteMPO` operator cannot be applied (no
+`FiniteMPO * WindowMPS`).  It matches the `MPSKitEnergyCurrent` operator to machine precision.
+Requires `mprime = 0` (as does the operator).  For `F > 1`/defects it falls back to the per-site
+operator (finite lattice only).
 
 `𝒥` is only defined on interior sites, so by default this returns a length-`N-2` vector (sites
 `2..N-1`). Pass `pad = true` to instead get a site-aligned length-`N` vector with `NaN` at the two
@@ -300,13 +307,13 @@ range guards.
 """
 function energycurrents(state::MPSKitState; pad::Bool = false)
     lat = lattice(state)
-    if _isfinitewindow(state)
-        # 𝒥_n = -i[b_n, b_{n-1}] spans sites n-1,n,n+1 — a genuine 3-site operator that the local
-        # `contract_mpo_expval2` machinery (all that works on a WindowMPS) cannot contract, and the
-        # `FiniteMPO` operator cannot be applied to a window (no `FiniteMPO * WindowMPS`). Not yet
-        # supported on windows; measure the energy current on a finite lattice instead.
-        throw(ArgumentError("energycurrents on a window is not yet supported (3-site operator); " *
-                            "use a finite lattice, or energy_densities for the window"))
+    if lat.F == 1 && isempty(state.defects) && !lat.flavor_sym && (isfinite(lat.N) || _isfinitewindow(state))
+        ψ = state.psi; W = length(ψ)
+        nrm2 = ψ isa MPSKit.InfiniteMPS ? 1.0 : real(dot(ψ, ψ))   # windows can drift from norm 1
+        vals = [_window_energy_current(ψ, lat, n) / nrm2 for n in 2:W-1]
+        return pad ? _pad_profile(vals, 2, W) : vals
+    elseif _isfinitewindow(state)
+        throw(ArgumentError("energycurrents on a window supports F = 1 with no defects"))
     else
         u = state.hamiltonian.universe; N = Int(lat.N)
         vals = [real(expectation(MPSKitEnergyCurrent(lat, s; universe = u), state)) for s in 2:N-1]
@@ -395,6 +402,57 @@ end
 function _contract_mpo_expval3(A1, A2, A3, O, A1b = A1, A2b = A2, A3b = A3)
     return @plansor conj(A1b[1 2; 3]) * conj(A2b[3 4; 5]) * conj(A3b[5 6; 7]) *
                     O[2 4 6; 8 9 10] * A1[1 8; 11] * A2[11 9; 12] * A3[12 10; 7]
+end
+
+# --- shared local tensor builders (F = 1) --------------------------------------------------------
+# On-site mass operator (bare = false, physical mass) as a 1-site TensorMap on the physical space of
+# `site`: diagonal −½ (empty) / +½ (occupied), scaled by `mlat[site]`. Identical to the closure used
+# by `_energy_densities_window` and to `_mpskit_mass_fmpo`'s per-site block.
+function _mpskit_massop(lat::Lattice, site::Int)
+    sp = get_mpskit_spaces(lat); P = sp[mod1(site, length(sp))]
+    mop = zeros(ComplexF64, P ← P)
+    block(mop, U1Irrep(0)) .= -0.5
+    block(mop, U1Irrep(isodd(site) ? -lat.q : lat.q)) .= 0.5
+    return lat.mlat[mod1(site, length(lat.mlat))][1] * mop
+end
+
+# Symmetric hopping transport χ†_ℓ χ_{ℓ+1} + h.c. on bond ℓ as a 2-site TensorMap (the `raw`
+# transport shared with `_energy_densities_window`). The kinetic hopping OPERATOR is (1/2a)·this.
+function _mpskit_hop_transport(lat::Lattice, ℓ::Int)
+    sp = get_mpskit_spaces(lat); q = lat.q
+    Pℓ = sp[mod1(ℓ, length(sp))]; Pℓ1 = sp[mod1(ℓ + 1, length(sp))]
+    raw = nothing
+    for qs in (q, -q)
+        openT  = ones(ComplexF64, U1Space(0 => 1)  ⊗ Pℓ  ← Pℓ  ⊗ U1Space(qs => 1))
+        closeT = ones(ComplexF64, U1Space(qs => 1) ⊗ Pℓ1 ← Pℓ1 ⊗ U1Space(0 => 1))
+        @tensor t[-1 -2; -3 -4] := openT[1, -1; -3, 2] * closeT[2, -2; -4, 1]
+        raw = raw === nothing ? t : raw + t
+    end
+    return raw
+end
+
+# Energy current 𝒥_n = -i[b_n, b_{n-1}] as a local 3-site contraction on sites (n-1, n, n+1), where
+# b_m = Hop(m) + ½Mass(m) + ½Mass(m+1), Hop(m) = (1/2a)·(symmetric transport). There is NO electric
+# term in b_m (no lattice Poynting vector), so 𝒥 is a pure product of local operators. The two bond
+# operators are built as dense 3-site operators (via ⊗ with single-site identities), commuted, and
+# contracted with `_contract_mpo_expval3`. This is O(1) memory / O(D³) per site — the memory-light,
+# window-capable analogue of the per-site `MPSKitEnergyCurrent` operator, which it matches to machine
+# precision (validated in test/energy_currents_local.jl). Requires mprime = 0 (as does the operator).
+function _window_energy_current(ψ, lat::Lattice, n::Int)
+    a = lat.a
+    sp = get_mpskit_spaces(lat)
+    idm = TensorKit.id(sp[mod1(n - 1, length(sp))])
+    id0 = TensorKit.id(sp[mod1(n,     length(sp))])
+    idp = TensorKit.id(sp[mod1(n + 1, length(sp))])
+    Mm = _mpskit_massop(lat, n - 1); M0 = _mpskit_massop(lat, n); Mp = _mpskit_massop(lat, n + 1)
+    hopn  = (1 / (2a)) * _mpskit_hop_transport(lat, n)       # kinetic Hop on (n, n+1)
+    hopnm = (1 / (2a)) * _mpskit_hop_transport(lat, n - 1)   # kinetic Hop on (n-1, n)
+    bn = hopn  + 0.5 * (M0 ⊗ idp) + 0.5 * (id0 ⊗ Mp)         # b_n     on sites (n, n+1)
+    bm = hopnm + 0.5 * (Mm ⊗ id0) + 0.5 * (idm ⊗ M0)         # b_{n-1} on sites (n-1, n)
+    Bn = idm ⊗ bn                                            # embed b_n     on triple (n-1,n,n+1)
+    Bm = bm ⊗ idp                                            # embed b_{n-1} on triple (n-1,n,n+1)
+    J = (-im) * (Bn * Bm - Bm * Bn)
+    return real(_contract_mpo_expval3(ψ.AC[n - 1], ψ.AR[n], ψ.AR[n + 1], J))
 end
 
 # Momentum density on window sites (n, n+1, n+2) as a *local 3-site operator tensor* contracted

@@ -1033,6 +1033,15 @@ Apply the operator `op` to the state `state`.
 """
 function act(op::MPSKitOperator, state::MPSKitState)
     validate_state_operator_compatibility(op, state)
+    if _isfinitewindow(state)
+        # The operator is the *whole-lattice* (infinite) MPO; there is no `FiniteMPO * WindowMPS`
+        # product, so a global `act` cannot be applied to a wavepacket window. Local operators can
+        # still be applied to the window tensors — point the user there.
+        throw(ArgumentError("act(::MPSKitOperator, state) cannot be applied to a wavepacket window " *
+                            "(no FiniteMPO * WindowMPS product). For a local operator, use " *
+                            "`apply_local(state, op_tensor, site)` instead, which edits the window " *
+                            "tensors and leaves the infinite wings untouched."))
+    end
     return MPSKitState(state.hamiltonian, op.lempo * state.psi, state.defects)
 end
 
@@ -1158,12 +1167,18 @@ LinearAlgebra.normalize(state::ITensorState) =
 
 function LinearAlgebra.normalize!(state::MPSKitState)
     state.psi isa MPSKit.InfiniteMPS && return state
-    normalize!(state.psi)
-    return state
+    normalize!(state.psi)      # mutates in place; for a WindowMPS returns the inner window — ignore it
+    return state               # keep the original psi object (still a WindowMPS/FiniteMPS)
 end
-LinearAlgebra.normalize(state::MPSKitState) =
-    state.psi isa MPSKit.InfiniteMPS ? state :
-    MPSKitState(state.hamiltonian, normalize!(copy(state.psi)), state.defects)
+function LinearAlgebra.normalize(state::MPSKitState)
+    state.psi isa MPSKit.InfiniteMPS && return state
+    # NB: `normalize!(::WindowMPS)` returns the inner FiniteMPS window, so we must NOT use its return
+    # value as the new psi (that would silently downgrade a WindowMPS to a FiniteMPS and break
+    # evolve/grow). Copy, normalize in place, and keep the copy (which stays a WindowMPS).
+    p = copy(state.psi)
+    normalize!(p)
+    return MPSKitState(state.hamiltonian, p, state.defects)
+end
 
 # =============================================================================
 # Persistence: savestate / loadstate  (JLD2)
@@ -1404,55 +1419,44 @@ end
 # call, which recomputes it — the dominant cost). Operators are cached by site/bond parity and
 # contracted directly via `contract_mpo_expval1/2`. Currently supports F = 1.
 # (`energy_density(state, site)` on a window indexes into this.)
-function _energy_densities_window(state::MPSKitState)
+# Batched local building blocks for MPSKit energy densities (F = 1): the per-site mass expectations
+# M(site) (bare = false) and the per-bond energies b(ℓ) = electric(ℓ) + hopping(ℓ) + hopping-mass(ℓ),
+# all via O(1)-memory local contractions (`contract_mpo_expval1/2`, `link_expectation`). Works for a
+# finite `FiniteMPS`, a bare `FiniteMPS` window, or a `WindowMPS` — any MPS exposing AC/AR. This is
+# the O(N·D³) replacement for the per-site full-MPO `expectation` path (which was O(N²)).
+function _mpskit_energy_parts(state::MPSKitState)
     lat = lattice(state); ψ = state.psi
-    lat.F == 1 || throw(ArgumentError("energy_density on a window currently supports F = 1"))
-    W = length(ψ); u = state.hamiltonian.universe
-    sp = get_mpskit_spaces(lat); P(n) = sp[mod1(n, length(sp))]
-    q = lat.q; a = lat.a
-    nrm2 = real(dot(ψ, ψ))
-
-    massop(site) = begin
-        mop = zeros(ComplexF64, P(site) ← P(site))
-        block(mop, U1Irrep(0)) .= -0.5
-        block(mop, U1Irrep(isodd(site) ? -q : q)) .= 0.5
-        lat.mlat[mod1(site, length(lat.mlat))][1] * mop
-    end
-    hopcache = Dict{Bool,Any}()                          # hopping operator depends only on bond parity
-    hopop(ℓ) = get!(hopcache, isodd(ℓ)) do
-        raw = nothing
-        for qs in (q, -q)
-            openT  = ones(ComplexF64, U1Space(0 => 1) ⊗ P(ℓ)     ← P(ℓ)     ⊗ U1Space(qs => 1))
-            closeT = ones(ComplexF64, U1Space(qs => 1) ⊗ P(ℓ + 1) ← P(ℓ + 1) ⊗ U1Space(0 => 1))
-            @tensor t[-1 -2; -3 -4] := openT[1, -1; -3, 2] * closeT[2, -2; -4, 1]
-            raw = raw === nothing ? t : raw + t
-        end
-        raw
-    end
-
-    masses = [real(MPSKit.contract_mpo_expval1(ψ.AC[site], massop(site))) / nrm2 for site in 1:W]
+    lat.F == 1 || throw(ArgumentError("local energy-density path currently supports F = 1"))
+    W = length(ψ); u = state.hamiltonian.universe; a = lat.a
+    nrm2 = ψ isa MPSKit.InfiniteMPS ? 1.0 : real(dot(ψ, ψ))
+    masses = [real(MPSKit.contract_mpo_expval1(ψ.AC[site], _mpskit_massop(lat, site))) / nrm2 for site in 1:W]
     bonds = map(1:W-1) do ℓ                              # each internal bond once
         θℓ = Float64(lat.θ2π[mod1(ℓ, length(lat.θ2π))]) + u
         b = link_expectation(ψ, ℓ, r::U1Irrep -> (a / 2) * (r.charge + θℓ)^2) / nrm2
         coeff = 1/(2a) + (-1)^(ℓ + 1) * lat.mprime[mod1(ℓ, length(lat.mprime))][1]
-        hop = real(MPSKit.contract_mpo_expval2(ψ.AC[ℓ], ψ.AR[ℓ + 1], hopop(ℓ))) / nrm2
+        hop = real(MPSKit.contract_mpo_expval2(ψ.AC[ℓ], ψ.AR[ℓ + 1], _mpskit_hop_transport(lat, ℓ))) / nrm2
         b + coeff * hop
     end
-    eds = [(masses[site] + _averaged_bond(ℓ -> bonds[ℓ], site, W, false)) / a for site in 1:W]   # per unit length
+    return masses, bonds, W, a
+end
 
+function _energy_densities_window(state::MPSKitState)
+    masses, bonds, W, a = _mpskit_energy_parts(state)
+    eds = [(masses[site] + _averaged_bond(ℓ -> bonds[ℓ], site, W, false)) / a for site in 1:W]   # per unit length
     # The two outermost sites miss the bond into the wing, which spikes their energy density.
     # For a `WindowMPS` the wings are the explicit infinite vacuum, so replace those sites with
     # the wing's vacuum energy density (≈ what a bulk vacuum site carries). This adds energy
     # living partly in the wings, so Σ(eds)·a no longer equals the window energy exactly — the
     # sum rule is therefore not asserted for window states. A bare `FiniteMPS` has no wing (a
     # genuine open boundary), so it is left as is.
-    if ψ isa WindowMPS
+    if state.psi isa WindowMPS
         lv, rv = _window_vacua(state)
         eds[1]   = real(energy_density(lv))
         eds[end] = real(energy_density(rv))
     end
     return eds
 end
+
 
 """
 `energy_densities(state; convention = :site)`
